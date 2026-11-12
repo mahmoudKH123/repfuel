@@ -161,7 +161,7 @@ legend { font-size: 13px; color: var(--text2); padding: 0; float: left; margin-t
 .weekline { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 14px 16px; animation-delay: 0.06s; }
 .weekline > div:first-child { display: flex; flex-direction: column; gap: 2px; }
 .weekline strong { font-size: 18px; font-variant-numeric: tabular-nums; }
-.section-head { display: flex; align-items: baseline; justify-content: space-between; }
+.section-head { display: flex; align-items: baseline; gap: 10px; }
 .section-head h2 { margin-bottom: 0; }
 .empty { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; animation-delay: 0.1s; }
 .empty p { margin: 0; }
