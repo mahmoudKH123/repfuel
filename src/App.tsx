@@ -6,6 +6,7 @@ import { Foods } from './screens/Foods'
 import { More } from './screens/More'
 import { AddFood } from './screens/AddFood'
 import { Logo } from './ui/Logo'
+import { useTheme } from './ui/theme'
 import { IconFoods, IconMore, IconPlus, IconToday, IconWeek } from './ui/icons'
 
 type Tab = 'today' | 'week' | 'foods' | 'more'
@@ -39,6 +40,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [date, setDate] = useState(today)
   const [adding, setAdding] = useState(false)
+  const [theme, toggleTheme] = useTheme()
   const [seenToday, setSeenToday] = useState(today)
   if (seenToday !== today) {
     // Day rolled over while the app was open: jump to the new day.
@@ -55,7 +57,9 @@ export default function App() {
   return (
     <div className="app">
       <header className="appbar">
-        <Logo size={38} />
+        <button className="logo-btn" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
+          <Logo size={38} />
+        </button>
         <div className="greet">
           <span>{greeting()}</span>
           <strong>Mahmoud</strong>
