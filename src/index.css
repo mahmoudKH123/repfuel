@@ -149,9 +149,6 @@ legend { font-size: 13px; color: var(--text2); padding: 0; float: left; margin-t
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .card { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin: 12px 0; animation: rise 0.4s var(--ease) both; }
-.stats { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; margin: 12px 0; }
-.stats dt { color: var(--text2); font-size: 14px; }
-.stats dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; font-weight: 500; }
 .list { list-style: none; margin: 12px 0; padding: 0 16px; background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); }
 .list li { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 0.5px solid var(--line); }
 .list li:last-child { border-bottom: 0; }
@@ -228,6 +225,46 @@ legend { font-size: 13px; color: var(--text2); padding: 0; float: left; margin-t
 .over { color: var(--fat); }
 @media (max-width: 360px) { .summary { gap: 14px; } .kring-center strong { font-size: 26px; } }
 
+/* Week page: week hero + one card per day */
+.wk-body { touch-action: pan-y; animation: fadeIn 0.28s var(--ease) both; }
+.wk-note { margin: 10px 4px 0; font-size: 14px; color: var(--text2); text-align: center; }
+.wk-note strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.wk-days { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.wk-day {
+  position: relative; display: grid; grid-template-columns: 44px 1fr auto;
+  column-gap: 12px; row-gap: 6px; align-items: center; padding: 12px 16px; margin: 0; cursor: pointer;
+  animation: rise 0.35s var(--ease) both; transition: transform 0.15s var(--ease);
+}
+.wk-day:active { transform: scale(0.98); }
+.wk-day.is-today { outline: 1.5px solid color-mix(in srgb, var(--kcal) 70%, transparent); outline-offset: -1.5px; }
+.wk-day.is-future { opacity: 0.6; }
+.wk-day.has-food .wk-ring, .wk-day.has-food .wk-ring-num { grid-row: 1 / span 3; }
+.wk-ring { grid-row: 1 / span 2; grid-column: 1; transform: rotate(-90deg); }
+.wk-ring circle { fill: none; stroke-width: 4.5; }
+.wk-ring-track { stroke: var(--track); }
+.wk-ring-arc { stroke: var(--kcal); stroke-linecap: round; }
+.wk-ring-arc.over { stroke: var(--fat); }
+.wk-ring-num {
+  grid-row: 1 / span 2; grid-column: 1; justify-self: center; font-size: 14px; font-weight: 700;
+  font-variant-numeric: tabular-nums; font-family: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif;
+}
+.wk-day.is-today .wk-ring-num { color: var(--kcal); }
+.wk-head { grid-column: 2; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wk-head strong { font-size: 16px; font-weight: 600; }
+.wk-chip { padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.wk-kcal { grid-column: 3; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; font-family: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif; }
+.wk-kcal small { font-size: 12px; font-weight: 600; color: var(--text2); }
+.wk-kcal.over { color: var(--fat); }
+.wk-ribbon { grid-column: 2 / 4; height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.wk-ribbon-fill {
+  display: block; height: 100%; border-radius: 4px;
+  background: linear-gradient(90deg, var(--protein) var(--s1), var(--carbs) var(--s2), var(--fat) var(--s3));
+  opacity: 0.85; transform-origin: left; animation: grow 0.8s var(--ease) both;
+}
+.wk-macros { grid-column: 2 / 4; display: flex; gap: 14px; font-size: 12px; font-weight: 600; color: var(--text2); font-variant-numeric: tabular-nums; }
+.wk-macros span { display: inline-flex; align-items: center; gap: 5px; }
+.wk-macros i { width: 6px; height: 6px; border-radius: 50%; }
+
 /* Today: week pulse (one bar per day vs its own target) */
 .pulse { padding: 16px 18px; animation-delay: 0.06s; }
 .pulse-head { display: flex; justify-content: space-between; align-items: center; }
@@ -298,9 +335,6 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 .hint { font-size: 12px; text-align: center; margin: 10px 0 0; }
 
 /* Week */
-.list li.is-today strong { color: var(--brand); }
-.mini-track { display: block; height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; margin-top: 4px; }
-.mini-fill { display: block; height: 100%; background: var(--kcal); transform-origin: left; animation: grow 0.8s var(--ease) both; }
 
 /* Bottom sheet (add food, quick add) */
 .sheet {
