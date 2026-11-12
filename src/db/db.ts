@@ -1,0 +1,55 @@
+import Dexie, { type EntityTable } from 'dexie'
+import type { DayOverride, Entry, Food, SettingRow, WeightLog } from './types'
+import { SEED_FOODS, SEED_VERSION } from './seedFoods'
+import { DEFAULT_SETTINGS } from './defaults'
+
+export class RepFuelDB extends Dexie {
+  foods!: EntityTable<Food, 'id'>
+  entries!: EntityTable<Entry, 'id'>
+  days!: EntityTable<DayOverride, 'date'>
+  weights!: EntityTable<WeightLog, 'date'>
+  settings!: EntityTable<SettingRow, 'key'>
+  meta!: EntityTable<{ key: string; value: number }, 'key'>
+
+  constructor(name = 'repfuel') {
+    super(name)
+    // Schema v1. To change the schema later, add this.version(2).stores({...}).upgrade(...) — never edit v1.
+    this.version(1).stores({
+      foods: '++id, &seedKey, name, category, archived',
+      entries: '++id, date, foodId, createdAt',
+      days: 'date',
+      weights: 'date',
+      settings: 'key',
+      meta: 'key',
+    })
+  }
+}
+
+export const db = new RepFuelDB()
+
+/**
+ * Adds any built-in foods that aren't in the database yet. Safe to run on every launch:
+ * it never overwrites foods the user has edited and never re-adds ones they deleted.
+ */
+export async function ensureSeeded(database: RepFuelDB = db): Promise<void> {
+  await database.transaction('rw', database.foods, database.settings, database.meta, async () => {
+    const seeded = (await database.meta.get('seedVersion'))?.value ?? 0
+    if (!(await database.settings.get('settings'))) {
+      await database.settings.put({ key: 'settings', value: DEFAULT_SETTINGS })
+    }
+    if (seeded >= SEED_VERSION) return
+
+    // Deleted foods are archived (soft-deleted), so they still count as existing here and won't come back.
+    const existing = new Set((await database.foods.toArray()).map((x) => x.seedKey).filter(Boolean))
+    const now = Date.now()
+    const toAdd: Food[] = SEED_FOODS.filter((s) => !existing.has(s.seedKey)).map((s) => ({
+      ...s,
+      estimate: s.estimate ?? false,
+      archived: 0,
+      createdAt: now,
+      updatedAt: now,
+    }))
+    if (toAdd.length) await database.foods.bulkAdd(toAdd)
+    await database.meta.put({ key: 'seedVersion', value: SEED_VERSION })
+  })
+}
