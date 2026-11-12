@@ -5,8 +5,8 @@ import { copyDay, deleteEntry, setDayType, updateEntryAmount } from '../db/repo'
 import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType } from '../logic/budget'
 import { useSettings, useWeek } from '../ui/hooks'
-import { fmtAmount, fmtMacros } from '../ui/format'
-import { AddFood } from './AddFood'
+import { fmtAmount } from '../ui/format'
+import { KcalRing, MacroBar } from '../ui/Progress'
 
 interface Props {
   date: string
@@ -14,11 +14,13 @@ interface Props {
   onDateChange: (d: string) => void
 }
 
+const r1 = (v: number) => Math.round(v * 10) / 10
+const k = (v: number) => Math.round(v).toLocaleString('en-US')
+
 export function Today({ date, today, onDateChange }: Props) {
   const settings = useSettings()
   const week = useWeek(date, today)
   const entries = useLiveQuery(() => db.entries.where('date').equals(date).sortBy('createdAt'), [date]) ?? []
-  const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [editAmount, setEditAmount] = useState('')
   const [notice, setNotice] = useState('')
@@ -32,8 +34,8 @@ export function Today({ date, today, onDateChange }: Props) {
     setNotice(count ? `Copied ${count} item${count === 1 ? '' : 's'} from ${formatDay(yesterday)}` : `Nothing logged on ${formatDay(yesterday)}`)
   }
 
-  const toggleType = () =>
-    setDayType(date, day.type === 'training' ? 'rest' : 'training', defaultDayType(date, settings))
+  const training = day.type === 'training'
+  const toggleType = () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings))
 
   const saveEdit = async (id: number) => {
     const v = Number(editAmount)
@@ -43,60 +45,77 @@ export function Today({ date, today, onDateChange }: Props) {
 
   return (
     <section>
-      <header className="row">
-        <button onClick={() => onDateChange(addDays(date, -1))} aria-label="Previous day">‹</button>
-        <h1>{date === today ? 'Today' : formatDay(date)}</h1>
-        <button onClick={() => onDateChange(addDays(date, 1))} aria-label="Next day">›</button>
-      </header>
-      {date !== today && <button className="link" onClick={() => onDateChange(today)}>Go to today</button>}
+      <div className="daynav">
+        <button className="icon-btn" onClick={() => onDateChange(addDays(date, -1))} aria-label="Previous day">‹</button>
+        <div className="daynav-title">
+          <h1>{date === today ? 'Today' : formatDay(date, { weekday: 'long' })}</h1>
+          <span className="muted">{formatDay(date, { day: 'numeric', month: 'long' })}</span>
+        </div>
+        <button className="icon-btn" onClick={() => onDateChange(addDays(date, 1))} aria-label="Next day">›</button>
+      </div>
 
-      <p>
-        {formatDay(date, { weekday: 'long', day: 'numeric', month: 'long' })} ·{' '}
-        <button onClick={toggleType}>{day.type === 'training' ? 'Training day' : 'Rest day'}</button>
-      </p>
+      <div className="pillrow">
+        <button className={`pill ${training ? 'pill-train' : 'pill-rest'}`} onClick={toggleType} aria-label={`${training ? 'Training' : 'Rest'} day, tap to switch`}>
+          {training ? 'Training day' : 'Rest day'}
+        </button>
+        {date !== today && <button className="pill" onClick={() => onDateChange(today)}>Go to today</button>}
+      </div>
 
-      <dl className="stats">
-        <dt>Target</dt><dd>{fmtMacros(day.target)}</dd>
-        <dt>Eaten</dt><dd>{fmtMacros(day.eaten)}</dd>
-        <dt>Left today</dt><dd>{fmtMacros(day.left)}</dd>
-        <dt>Left this week</dt><dd>{fmtMacros(week.left)}</dd>
-      </dl>
-      {day.fatOver > 0 && <p className="warn">Fat is {Math.round(day.fatOver * 10) / 10}g over today's target.</p>}
+      <div className="card hero">
+        <KcalRing eaten={day.eaten.kcal} target={day.target.kcal} />
+        <div className="bars">
+          <MacroBar label="Protein" color="var(--protein)" eaten={day.eaten.protein} target={day.target.protein} />
+          <MacroBar label="Carbs" color="var(--carbs)" eaten={day.eaten.carbs} target={day.target.carbs} />
+          <MacroBar label="Fat" color="var(--fat)" eaten={day.eaten.fat} target={day.target.fat} />
+        </div>
+      </div>
+      {day.fatOver > 0 && <p className="banner warn">Fat is {r1(day.fatOver)}g over today's target.</p>}
 
-      <h2>Logged</h2>
+      <div className="card weekline">
+        <div><span className="muted">Left this week</span><strong>{k(week.left.kcal)} kcal</strong></div>
+        <div className="muted">{k(week.left.protein)}P · {k(week.left.carbs)}C · {k(week.left.fat)}F</div>
+      </div>
+
+      <div className="section-head">
+        <h2>Logged</h2>
+        <span className="muted">{k(day.eaten.kcal)} kcal</span>
+      </div>
       {entries.length === 0 ? (
-        <p className="muted">Log your first item, or copy {formatDay(yesterday)}.</p>
+        <div className="card empty">
+          <p className="muted">Nothing logged yet. Tap + to add food.</p>
+          <button onClick={copyYesterday}>Copy {formatDay(yesterday)}</button>
+        </div>
       ) : (
-        <ul className="list">
+        <ul className="card list">
           {entries.map((e) => (
-            <li key={e.id}>
-              <div>
-                <strong>{e.name}</strong>{e.estimate && <span className="tag">estimate</span>}
-                <div className="muted">{fmtAmount(e.amount, e.unit)} · {fmtMacros(e)}</div>
+            <li key={e.id} className="entry">
+              <div className="entry-main">
+                <strong>{e.name}{e.estimate && <span className="tag">est.</span>}</strong>
+                <div className="chips">
+                  <span className="muted">{fmtAmount(e.amount, e.unit)}</span>
+                  <span className="chip kcal">{k(e.kcal)}</span>
+                  <span className="chip p">{r1(e.protein)}P</span>
+                  <span className="chip c">{r1(e.carbs)}C</span>
+                  <span className="chip f">{r1(e.fat)}F</span>
+                </div>
               </div>
               {editing === e.id ? (
-                <form onSubmit={(ev) => { ev.preventDefault(); saveEdit(e.id!) }} className="row">
+                <form onSubmit={(ev) => { ev.preventDefault(); saveEdit(e.id!) }} className="row edit">
                   <input type="number" inputMode="decimal" step="any" min="0" value={editAmount} onChange={(ev) => setEditAmount(ev.target.value)} autoFocus aria-label="Amount" />
-                  <button type="submit">Save</button>
+                  <button type="submit" className="primary">Save</button>
                 </form>
               ) : (
                 <div className="row">
-                  <button onClick={() => { setEditing(e.id!); setEditAmount(String(e.amount)) }}>Edit</button>
-                  <button onClick={() => deleteEntry(e.id!)}>Delete</button>
+                  <button className="small" onClick={() => { setEditing(e.id!); setEditAmount(String(e.amount)) }}>Edit</button>
+                  <button className="small danger" onClick={() => deleteEntry(e.id!)} aria-label={`Delete ${e.name}`}>✕</button>
                 </div>
               )}
             </li>
           ))}
         </ul>
       )}
-
-      <div className="row">
-        <button className="primary" onClick={() => setAdding(true)}>Add food</button>
-        <button onClick={copyYesterday}>Same as yesterday</button>
-      </div>
+      {entries.length > 0 && <button className="link" onClick={copyYesterday}>Same as yesterday</button>}
       {notice && <p className="muted" role="status">{notice}</p>}
-
-      {adding && <AddFood date={date} onClose={() => setAdding(false)} />}
     </section>
   )
 }

@@ -20,13 +20,16 @@ export function Week({ date, today, onDateChange, onOpenDay }: Props) {
 
   return (
     <section>
-      <header className="row">
-        <button onClick={() => onDateChange(addDays(first, -7))} aria-label="Previous week">‹</button>
-        <h1>{formatDay(first, { day: 'numeric', month: 'short' })} – {formatDay(last, { day: 'numeric', month: 'short' })}</h1>
-        <button onClick={() => onDateChange(addDays(first, 7))} aria-label="Next week">›</button>
-      </header>
+      <div className="daynav">
+        <button className="icon-btn" onClick={() => onDateChange(addDays(first, -7))} aria-label="Previous week">‹</button>
+        <div className="daynav-title">
+          <h1>{week.days.some((d) => d.date === today) ? 'This week' : 'Week'}</h1>
+          <span className="muted">{formatDay(first, { day: 'numeric', month: 'short' })} – {formatDay(last, { day: 'numeric', month: 'short' })}</span>
+        </div>
+        <button className="icon-btn" onClick={() => onDateChange(addDays(first, 7))} aria-label="Next week">›</button>
+      </div>
 
-      <dl className="stats">
+      <dl className="card stats">
         <dt>Weekly pool</dt><dd>{fmtMacros(week.pool)}</dd>
         <dt>Eaten</dt><dd>{fmtMacros(week.eaten)}</dd>
         <dt>Left this week</dt><dd>{fmtMacros(week.left)}</dd>
@@ -34,14 +37,15 @@ export function Week({ date, today, onDateChange, onOpenDay }: Props) {
       </dl>
       {week.fatOver > 0 && <p className="warn">Weekly fat is {Math.round(week.fatOver * 10) / 10}g over the pool.</p>}
 
-      <ul className="list">
+      <ul className="card list">
         {week.days.map((d) => (
-          <li key={d.date}>
+          <li key={d.date} className={d.date === today ? 'is-today' : ''}>
             <button className="item" onClick={() => onOpenDay(d.date)}>
               <strong>{formatDay(d.date)}{d.date === today ? ' · today' : ''}</strong>
               <span className="muted">{Math.round(d.eaten.kcal).toLocaleString('en-US')} / {d.target.kcal.toLocaleString('en-US')} kcal{d.fatOver > 0 ? ` · fat +${Math.round(d.fatOver * 10) / 10}g` : ''}</span>
+              <span className="mini-track"><span className="mini-fill" style={{ transform: `scaleX(${Math.min(1, d.target.kcal ? d.eaten.kcal / d.target.kcal : 0)})` }} /></span>
             </button>
-            <button onClick={() => setDayType(d.date, d.type === 'training' ? 'rest' : 'training', defaultDayType(d.date, settings))}>
+            <button className={`pill ${d.type === 'training' ? 'pill-train' : 'pill-rest'}`} onClick={() => setDayType(d.date, d.type === 'training' ? 'rest' : 'training', defaultDayType(d.date, settings))}>
               {d.type === 'training' ? 'Training' : 'Rest'}
             </button>
           </li>

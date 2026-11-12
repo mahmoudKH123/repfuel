@@ -4,7 +4,7 @@ import { db } from '../db/db'
 import { archiveFood, saveFood } from '../db/repo'
 import type { Food, FoodCategory, Unit } from '../db/types'
 import { kcalFromMacros, kcalLooksWrong } from '../logic/macros'
-import { fmtMacros, unitLabel } from '../ui/format'
+import { fmtAmount, fmtMacros } from '../ui/format'
 
 const CATEGORIES: { value: FoodCategory; label: string }[] = [
   { value: 'branded', label: 'Branded' },
@@ -45,7 +45,7 @@ export function Foods() {
           <li key={f.id}>
             <button className="item" onClick={() => setEditing(f)}>
               <strong>{f.name}{f.estimate && <span className="tag">estimate</span>}{f.needsReview && <span className="tag warn">check</span>}</strong>
-              <span className="muted">{f.servingLabel ?? `${f.baseAmount} ${unitLabel(f.unit)}`} · {fmtMacros(f)}</span>
+              <span className="muted">{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)} · {fmtMacros(f)}</span>
             </button>
           </li>
         ))}

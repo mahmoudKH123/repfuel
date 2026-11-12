@@ -1,16 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { todayKey } from './logic/dates'
 import { Today } from './screens/Today'
 import { Week } from './screens/Week'
 import { Foods } from './screens/Foods'
 import { More } from './screens/More'
+import { AddFood } from './screens/AddFood'
+import { Logo } from './ui/Logo'
+import { IconFoods, IconMore, IconPlus, IconToday, IconWeek } from './ui/icons'
 
 type Tab = 'today' | 'week' | 'foods' | 'more'
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'today', label: 'Today' },
-  { id: 'week', label: 'Week' },
-  { id: 'foods', label: 'Foods' },
-  { id: 'more', label: 'More' },
+const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
+  { id: 'today', label: 'Today', icon: <IconToday /> },
+  { id: 'week', label: 'Week', icon: <IconWeek /> },
+  { id: 'foods', label: 'Foods', icon: <IconFoods /> },
+  { id: 'more', label: 'More', icon: <IconMore /> },
 ]
 
 /** Keeps "today" correct if the app stays open past midnight or is resumed the next day. */
@@ -29,6 +32,7 @@ export default function App() {
   const today = useToday()
   const [tab, setTab] = useState<Tab>('today')
   const [date, setDate] = useState(today)
+  const [adding, setAdding] = useState(false)
   const [seenToday, setSeenToday] = useState(today)
   if (seenToday !== today) {
     // Day rolled over while the app was open: jump to the new day.
@@ -38,17 +42,28 @@ export default function App() {
 
   return (
     <div className="app">
-      <main>
+      <header className="appbar">
+        <Logo />
+        <span>RepFuel</span>
+      </header>
+      <main key={tab} className="screen">
         {tab === 'today' && <Today date={date} today={today} onDateChange={setDate} />}
         {tab === 'week' && <Week date={date} today={today} onDateChange={setDate} onOpenDay={(d) => { setDate(d); setTab('today') }} />}
         {tab === 'foods' && <Foods />}
         {tab === 'more' && <More today={today} />}
       </main>
+      {(tab === 'today' || tab === 'week') && !adding && (
+        <button className="fab" onClick={() => setAdding(true)} aria-label="Add food"><IconPlus /></button>
+      )}
       <nav className="tabs" aria-label="Sections">
         {TABS.map((t) => (
-          <button key={t.id} aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>{t.label}</button>
+          <button key={t.id} aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>
+            {t.icon}
+            <span>{t.label}</span>
+          </button>
         ))}
       </nav>
+      {adding && <AddFood date={date} onClose={() => setAdding(false)} />}
     </div>
   )
 }

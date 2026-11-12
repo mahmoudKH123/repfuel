@@ -4,7 +4,7 @@ import { db } from '../db/db'
 import { logFood, logQuick, saveFood } from '../db/repo'
 import type { Food } from '../db/types'
 import { defaultAmount, scaleFood } from '../logic/macros'
-import { fmtMacros, unitLabel } from '../ui/format'
+import { fmtAmount, fmtMacros, unitLabel } from '../ui/format'
 
 interface Props {
   date: string
@@ -59,7 +59,7 @@ export function AddFood({ date, onClose }: Props) {
       {picked ? (
         <form onSubmit={(e) => { e.preventDefault(); add() }}>
           <p><strong>{picked.name}</strong>{picked.estimate && <span className="tag">estimate</span>}</p>
-          <p className="muted">Per {picked.servingLabel ?? `${picked.baseAmount} ${unitLabel(picked.unit)}`}: {fmtMacros(picked)}</p>
+          <p className="muted">Per {picked.servingLabel ?? fmtAmount(picked.baseAmount, picked.unit)}: {fmtMacros(picked)}</p>
           {picked.needsReview && <p className="warn">{picked.note ?? 'Check these numbers.'}</p>}
           <label>
             Amount ({unitLabel(picked.unit)})
@@ -81,7 +81,7 @@ export function AddFood({ date, onClose }: Props) {
               <li key={f.id}>
                 <button className="item" onClick={() => pick(f)}>
                   <strong>{f.name}</strong>
-                  <span className="muted">{f.servingLabel ?? `${f.baseAmount} ${unitLabel(f.unit)}`} · {fmtMacros(f)}</span>
+                  <span className="muted">{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)} · {fmtMacros(f)}</span>
                 </button>
               </li>
             ))}
