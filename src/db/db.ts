@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { DayOverride, Entry, Food, SettingRow, WeightLog } from './types'
-import { SEED_FOODS, SEED_VERSION } from './seedFoods'
+import { REMOVED_SEED_KEYS, SEED_FOODS, SEED_VERSION } from './seedFoods'
 import { DEFAULT_SETTINGS } from './defaults'
 
 export class RepFuelDB extends Dexie {
@@ -50,6 +50,14 @@ export async function ensureSeeded(database: RepFuelDB = db): Promise<void> {
       updatedAt: now,
     }))
     if (toAdd.length) await database.foods.bulkAdd(toAdd)
+
+    // Hide built-in foods that were taken out of the list, but keep any the user has edited themselves.
+    const removed = await database.foods.where('seedKey').anyOf(REMOVED_SEED_KEYS).toArray()
+    for (const food of removed) {
+      if (food.archived !== 1 && food.updatedAt === food.createdAt) {
+        await database.foods.update(food.id!, { archived: 1, updatedAt: now })
+      }
+    }
     await database.meta.put({ key: 'seedVersion', value: SEED_VERSION })
   })
 }

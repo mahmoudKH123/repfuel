@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { RepFuelDB, ensureSeeded } from './db'
-import { SEED_FOODS } from './seedFoods'
+import { REMOVED_SEED_KEYS, SEED_FOODS } from './seedFoods'
 import { exportBackup, parseBackup, restoreBackup } from './backup'
 
 let n = 0
@@ -25,6 +25,21 @@ describe('database', () => {
     await database.meta.put({ key: 'seedVersion', value: 0 })
     await ensureSeeded(database)
     expect(await database.foods.where('seedKey').equals('sunshine-tuna').count()).toBe(1)
+  })
+
+  it('hides removed built-in foods on existing installs, but keeps ones the user edited', async () => {
+    const now = 1
+    const old = (seedKey: string, updatedAt: number) => ({
+      seedKey, name: seedKey, category: 'branded' as const, baseAmount: 1, unit: 'serving' as const,
+      kcal: 1, protein: 1, carbs: 1, fat: 1, estimate: false, archived: 0 as const, createdAt: now, updatedAt,
+    })
+    // Simulate a phone that installed the v1 list, then the user fixed the pesto sandwich themselves.
+    await database.foods.bulkAdd([old('reef-protein-bread', now), old('bf-pesto-chicken', 5)])
+    await database.meta.put({ key: 'seedVersion', value: 1 })
+    await ensureSeeded(database)
+    expect((await database.foods.where('seedKey').equals('reef-protein-bread').first())?.archived).toBe(1)
+    expect((await database.foods.where('seedKey').equals('bf-pesto-chicken').first())?.archived).toBe(0)
+    expect(SEED_FOODS.some((s) => REMOVED_SEED_KEYS.includes(s.seedKey))).toBe(false)
   })
 
   it('round-trips a backup', async () => {

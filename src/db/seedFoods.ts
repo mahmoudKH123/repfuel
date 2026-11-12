@@ -29,7 +29,14 @@ const f = (
 ): SeedFood => ({ seedKey, name, category, baseAmount, unit, kcal, protein, carbs, fat, ...opts })
 
 /** Bump when the seed list changes; the app adds new seed foods on next launch. */
-export const SEED_VERSION = 1
+export const SEED_VERSION = 2
+
+/**
+ * Built-in foods taken out of the list because their data was wrong or incomplete.
+ * On next launch they're hidden (archived) on phones that already have them, unless the user edited them.
+ * Past log entries keep their own macros, so history is unaffected.
+ */
+export const REMOVED_SEED_KEYS: string[] = ['reef-protein-bread', 'bf-pesto-chicken']
 
 /** Mahmoud's food database (last updated Nov 5, 2026). */
 export const SEED_FOODS: SeedFood[] = [
@@ -60,7 +67,6 @@ export const SEED_FOODS: SeedFood[] = [
   f('tortilla', 'Tortilla bread', 'branded', 1, 'serving', [250, 7, 55, 0.5], { servingLabel: '1 piece, 90g', note: 'Earlier Rich Bake tortilla: 250 / 7P / 53C / 1F' }),
   f('pastirma', 'Pastirma', 'branded', 20, 'g', [45, 5.6, 0.3, 2.5], { estimate: true }),
   f('richbake-pita', 'Rich Bake pita bread', 'branded', 1, 'serving', [116, 3, 26, 0]),
-  f('reef-protein-bread', 'Reef protein bread', 'branded', 1, 'serving', [13, 4.5, 11, 1], { needsReview: true, note: 'Saved as 13 kcal, but the macros add up to about 71 kcal' }),
   f('gedy-bread', 'Gedy bread', 'branded', 1, 'serving', [98, 3, 19, 1]),
   f('halo-rice-cake', 'Halo organic rice cake', 'branded', 1, 'serving', [27, 0, 6, 0.2]),
   f('halo-puffs', 'Halo protein puffs', 'branded', 1, 'serving', [160, 8, 21, 5]),
@@ -123,7 +129,6 @@ export const SEED_FOODS: SeedFood[] = [
   // Restaurant / delivery
   f('bf-spicy-chicken', 'Breadfast spicy chicken sandwich', 'restaurant', 1, 'serving', [505, 37, 48, 18]),
   f('bf-honey-mustard', 'Breadfast honey mustard chicken', 'restaurant', 1, 'serving', [495, 37, 51, 14]),
-  f('bf-pesto-chicken', 'Breadfast pesto chicken sandwich', 'restaurant', 1, 'serving', [522, 38, 50, 19], { estimate: true, needsReview: true, note: 'Only 522 kcal / 38P were saved; carbs and fat are estimates' }),
   f('talabat-tuna', 'Talabat tuna sandwich', 'restaurant', 1, 'serving', [390, 21, 42, 16]),
   f('talabat-honey-mustard', 'Talabat chicken honey mustard sandwich', 'restaurant', 1, 'serving', [420, 28, 48, 12]),
   f('better-bbq-bowl', 'Better BBQ Chicken Taco Bowl', 'restaurant', 1, 'serving', [650, 47, 80, 15]),
