@@ -7,6 +7,7 @@ import type { DayType, Macros, Settings } from '../db/types'
 import { formatDay } from '../logic/dates'
 import { weeklyWeights } from '../logic/weight'
 import { useSettings } from '../ui/hooks'
+import { getPass, setPass } from '../logic/ai'
 
 export function More({ today }: { today: string }) {
   return (
@@ -14,6 +15,7 @@ export function More({ today }: { today: string }) {
       <h1>More</h1>
       <WeightLog today={today} />
       <Targets />
+      <AiPanel />
       <BackupPanel />
     </section>
   )
@@ -152,6 +154,21 @@ function BackupPanel() {
       </div>
       {msg && <p role="status">{msg}</p>}
       {persisted === false && <p className="muted">Storage isn't locked yet. Add RepFuel to your Home Screen so iOS keeps your data.</p>}
+    </>
+  )
+}
+
+function AiPanel() {
+  const [value, setValue] = useState(getPass)
+  const [saved, setSaved] = useState(false)
+  return (
+    <>
+      <h2>AI</h2>
+      <p className="muted">Passcode for Ask AI and Scan label. Typed once, kept on this phone.</p>
+      <form className="row" onSubmit={(e) => { e.preventDefault(); setPass(value.trim()); setSaved(true) }}>
+        <input type="password" autoComplete="off" placeholder="AI passcode" value={value} onChange={(e) => { setValue(e.target.value); setSaved(false) }} aria-label="AI passcode" />
+        <button type="submit" className="primary">{saved ? 'Saved ✓' : 'Save'}</button>
+      </form>
     </>
   )
 }

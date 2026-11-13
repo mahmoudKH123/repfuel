@@ -49,10 +49,12 @@ export default function App() {
   }
 
   const openAdd = () => {
-    // Foods and More have no day on screen, so show Today behind the sheet.
+    // Foods and More have no day on screen, so come back to Today after adding.
     if (tab === 'foods' || tab === 'more') setTab('today')
     setAdding(true)
   }
+
+  if (adding) return <AddFood date={date} today={today} onClose={() => setAdding(false)} />
 
   return (
     <div className="app">
@@ -84,7 +86,6 @@ export default function App() {
           </Fragment>
         ))}
       </nav>
-      {adding && <AddFood date={date} onClose={() => setAdding(false)} />}
     </div>
   )
 }
