@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type T
 import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
-import { deleteWeight, logWeight, renamePlanDay, saveExercise, saveSettings, saveTrainingWeek } from '../db/repo'
+import { addExerciseToDay, deleteWeight, logWeight, removeExerciseFromDay, renamePlanDay, reorderDay, saveExercise, saveSettings, saveTrainingWeek } from '../db/repo'
 import { exportBackup, parseBackup, restoreBackup } from '../db/backup'
 import type { DayType, Exercise, Macros, PlanDay, Settings as SettingsT } from '../db/types'
 import { addDays, formatDay } from '../logic/dates'
@@ -12,6 +12,7 @@ import { sum } from '../logic/macros'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, mondayOf } from '../logic/schedule'
 import { applyWeights, fmtWeight } from '../logic/train'
 import { getPass, setPass } from '../logic/ai'
+import { searchByName } from '../logic/search'
 import { useSettings } from '../ui/hooks'
 import { useCountUp } from '../ui/motion'
 import { WeightDial } from '../ui/WeightDial'
@@ -444,15 +445,19 @@ function TrainingPanel({ today, settings, plan }: { today: string; settings: Set
   const [pick, setPick] = useState<number | null>(null)
   const [thisWeek, setThisWeek] = useState(true)
   const [saved, setSaved] = useState(false)
-  const [renaming, setRenaming] = useState<string | null>(null)
+  const [openDay, setOpenDay] = useState<string | null>(null)
   const exercises = useLiveQuery(() => db.exercises.toArray(), []) ?? []
-  const [dial, setDial] = useState<Exercise | null>(null)
+  const byId = new Map(exercises.map((e) => [e.id, e]))
   const short = (id: string) => (id === 'rest' ? 'Rest' : plan.find((p) => p.id === id)?.short ?? id)
   const dirty = days.join() !== base.join()
   const count = (id: string) => days.filter((d) => d === id).length
   const missing = plan.filter((p) => !days.includes(p.id))
-  const usedBy = (id: string) => plan.filter((p) => p.exerciseIds.includes(id)).map((p) => p.short).join(' · ')
-  const sorted = [...exercises].sort((a, b) => a.name.localeCompare(b.name))
+  const opened = plan.find((p) => p.id === openDay)
+  if (opened) {
+    const i = plan.indexOf(opened)
+    return <DayPage key={opened.id} day={opened} tone={DAY_TONES[i % DAY_TONES.length]} plan={plan} exercises={exercises}
+      on={days.flatMap((d, j) => (d === opened.id ? [WEEKDAYS[j]] : []))} onBack={() => setOpenDay(null)} />
+  }
 
   return (
     <div className="st-training">
@@ -492,34 +497,134 @@ function TrainingPanel({ today, settings, plan }: { today: string; settings: Set
       </div>
       <p className="st-note">Rest days here also set your rest-day calorie targets.</p>
 
-      <h3 className="st-h">Workout days</h3>
-      <ul className="st-list">
-        {plan.map((p) => (
-          <li key={p.id} className="st-plan">
-            {renaming === p.id ? (
-              <RenameRow day={p} onDone={() => setRenaming(null)} />
-            ) : (
-              <>
-                <span>{p.name}<small>{p.short} · {p.exerciseIds.length} exercises</small></span>
-                <button className="st-del" onClick={() => setRenaming(p.id)}>Rename</button>
-              </>
-            )}
-          </li>
-        ))}
-      </ul>
-
-      <h3 className="st-h">All exercises <span>{exercises.length}</span></h3>
-      <ul className="st-list st-ex">
-        {sorted.map((e) => (
-          <li key={e.id}>
-            <span>{e.name}<small>{e.sets} × {e.reps || 'failure'} · {usedBy(e.id)}</small></span>
-            <button className="tr-wpill" onClick={() => setDial(e)} aria-label={`${e.name} weight, tap to change`}>
-              <span key={e.weight} className="tr-w">{fmtWeight(e.weight)} {e.unit}</span>
-              {e.next && <small className="st-goal">→ {fmtWeight(e.next.weight)}</small>}
+      <h3 className="st-h">Workout days <span>{plan.length}</span></h3>
+      <div className="st-days">
+        {plan.map((p, i) => {
+          const list = p.exerciseIds.map((id) => byId.get(id)).filter((e): e is Exercise => !!e)
+          const on = days.flatMap((d, j) => (d === p.id ? [WEEKDAYS[j]] : []))
+          return (
+            <button key={p.id} className="st-day" style={{ '--dc': DAY_TONES[i % DAY_TONES.length], animationDelay: `${i * 45}ms` } as CSSProperties} onClick={() => setOpenDay(p.id)}>
+              <span className="st-day-top">
+                <b className="st-day-chip">{p.short}</b>
+                <small className={on.length ? '' : 'off'}>{on.length ? on.join(' · ') : 'Not in your week'}</small>
+              </span>
+              <strong>{p.name}</strong>
+              <span className="st-day-meta">{list.length} exercises · {list.reduce((t, e) => t + e.sets, 0)} sets</span>
+              <span className="st-day-peek">{list.slice(0, 3).map((e) => e.name).join(', ')}{list.length > 3 ? ` +${list.length - 3}` : ''}</span>
+              <svg className="st-day-go" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
             </button>
-          </li>
-        ))}
-      </ul>
+          )
+        })}
+      </div>
+      <p className="st-note">Tap a day to rename it and edit its exercises.</p>
+    </div>
+  )
+}
+
+const DAY_TONES = ['var(--protein)', 'var(--kcal)', 'var(--carbs)', 'var(--fat)', 'var(--ai)', 'var(--teal)']
+
+/** One workout day, opened from its card: rename it, then edit, reorder, add or remove its exercises. */
+function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; tone: string; plan: PlanDay[]; exercises: Exercise[]; on: string[]; onBack: () => void }) {
+  const byId = new Map(exercises.map((e) => [e.id, e]))
+  const list = day.exerciseIds.map((id) => byId.get(id)).filter((e): e is Exercise => !!e)
+  const [name, setName] = useState(day.name)
+  const [short, setShort] = useState(day.short)
+  const [saved, setSaved] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [reorder, setReorder] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [dial, setDial] = useState<Exercise | null>(null)
+  const alsoOn = (id: string) => plan.filter((p) => p.id !== day.id && p.exerciseIds.includes(id)).map((p) => p.short)
+
+  useEffect(() => { document.querySelector('.st-panel-body')?.scrollTo({ top: 0 }) }, [])
+  useEffect(() => {
+    if (!saved) return
+    const id = window.setTimeout(() => setSaved(false), 1400)
+    return () => window.clearTimeout(id)
+  }, [saved])
+
+  // Names save when you leave the field (or press Return); empty names snap back.
+  const commit = async () => {
+    const n = name.trim(), sh = short.trim().slice(0, 6)
+    if (!n || !sh) { setName(day.name); setShort(day.short); return }
+    if (n === day.name && sh === day.short) return
+    await renamePlanDay(day.id, n, sh)
+    setSaved(true)
+  }
+  const blurOnEnter = (ev: { key: string; currentTarget: HTMLInputElement }) => { if (ev.key === 'Enter') ev.currentTarget.blur() }
+  const move = (i: number, d: number) => {
+    const ids = list.map((e) => e.id)
+    const j = i + d
+    if (j < 0 || j >= ids.length) return
+    ;[ids[i], ids[j]] = [ids[j], ids[i]]
+    reorderDay(day.id, ids)
+  }
+
+  return (
+    <div className="st-dpage" style={{ '--dc': tone } as CSSProperties}>
+      <button className="st-back" onClick={onBack}>
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+        Workout days
+      </button>
+
+      <div className="st-dhero">
+        <label className="st-dtitle">
+          <input value={name} onChange={(e) => setName(e.target.value)} onBlur={commit} onKeyDown={blurOnEnter} aria-label="Workout day name" enterKeyHint="done" autoComplete="off" />
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
+        </label>
+        <div className="st-dsub">
+          <label className="st-dchip" title="Short name (max 6)">
+            <input value={short} maxLength={6} onChange={(e) => setShort(e.target.value)} onBlur={commit} onKeyDown={blurOnEnter} aria-label="Short name, up to 6 letters" enterKeyHint="done" autoComplete="off" />
+          </label>
+          <span>{on.length ? on.join(' · ') : 'Not in your week'} · {list.length} exercises · {list.reduce((t, e) => t + e.sets, 0)} sets</span>
+          <span className={`st-dsaved${saved ? ' on' : ''}`} aria-live="polite">{saved ? 'Saved' : ''}</span>
+        </div>
+      </div>
+
+      <div className="st-dbar">
+        <h3 className="st-h">Exercises</h3>
+        {list.length > 1 && <button className={`st-dlink${reorder ? ' on' : ''}`} onClick={() => { setReorder((v) => !v); setEditing(null) }}>{reorder ? 'Done' : 'Reorder'}</button>}
+      </div>
+      {list.length ? (
+        <ul className={`st-dlist${reorder ? ' reorder' : ''}`}>
+          {list.map((e, i) => {
+            const shared = alsoOn(e.id)
+            return (
+              <li key={e.id} className={editing === e.id ? 'open' : ''} style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
+                {editing === e.id ? (
+                  <ExerciseEditor e={e} dayShort={day.short} shared={shared} onClose={() => setEditing(null)}
+                    onRemove={async () => { await removeExerciseFromDay(day.id, e.id); setEditing(null) }} />
+                ) : (
+                  <>
+                    <span className="st-dnum">{i + 1}</span>
+                    <button className="st-dname" onClick={() => !reorder && setEditing(e.id)} aria-label={`Edit ${e.name}`}>
+                      <b>{e.name}</b>
+                      <small>{e.sets} × {e.reps || 'failure'}{shared.length > 0 && <i>also {shared.join(', ')}</i>}</small>
+                    </button>
+                    {reorder ? (
+                      <span className="st-dmove">
+                        <button onClick={() => move(i, -1)} disabled={i === 0} aria-label={`Move ${e.name} up`}><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg></button>
+                        <button onClick={() => move(i, 1)} disabled={i === list.length - 1} aria-label={`Move ${e.name} down`}><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></button>
+                      </span>
+                    ) : (
+                      <button className="tr-wpill" onClick={() => setDial(e)} aria-label={`${e.name} weight, tap to change`}>
+                        <span key={e.weight} className="tr-w">{fmtWeight(e.weight)} {e.unit}</span>
+                        {e.next && <small className="st-goal">→ {fmtWeight(e.next.weight)}</small>}
+                      </button>
+                    )}
+                  </>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="st-dempty">No exercises yet. Add the first one below.</p>
+      )}
+
+      {adding ? <AddToDay day={day} exercises={exercises} plan={plan} onDone={() => setAdding(false)} />
+        : <button className="st-dadd" onClick={() => { setAdding(true); setReorder(false) }}>+ Add exercise</button>}
+
       {dial && (
         <WeightDial e={dial} start="now" onClose={() => setDial(null)}
           onSave={async (w, nw) => { await saveExercise(applyWeights(dial, w, nw)); setDial(null) }} />
@@ -528,15 +633,93 @@ function TrainingPanel({ today, settings, plan }: { today: string; settings: Set
   )
 }
 
-function RenameRow({ day, onDone }: { day: PlanDay; onDone: () => void }) {
-  const [name, setName] = useState(day.name)
-  const [short, setShort] = useState(day.short)
+function Mini({ label, value, min, onChange, show }: { label: string; value: number; min: number; onChange: (n: number) => void; show?: (n: number) => string }) {
   return (
-    <form className="st-rename" onSubmit={async (e) => { e.preventDefault(); if (name.trim() && short.trim()) { await renamePlanDay(day.id, name.trim(), short.trim().slice(0, 6)); onDone() } }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} aria-label="Workout name" autoFocus />
-      <input value={short} onChange={(e) => setShort(e.target.value)} aria-label="Short name" maxLength={6} className="st-short" />
-      <button type="submit" className="primary small">Save</button>
+    <div className="st-step">
+      <span>{label}</span>
+      <div>
+        <button type="button" onClick={() => onChange(Math.max(min, value - 1))} disabled={value <= min} aria-label={`Less ${label}`}>−</button>
+        <b key={value}>{show ? show(value) : value}</b>
+        <button type="button" onClick={() => onChange(value + 1)} aria-label={`More ${label}`}>+</button>
+      </div>
+    </div>
+  )
+}
+
+/** Inline editor for one exercise: rename and sets/reps. A shared lift changes on every day it's on. */
+function ExerciseEditor({ e, dayShort, shared, onClose, onRemove }: { e: Exercise; dayShort: string; shared: string[]; onClose: () => void; onRemove: () => void }) {
+  const [name, setName] = useState(e.name)
+  const [sets, setSets] = useState(e.sets)
+  const [reps, setReps] = useState(e.reps)
+  const save = async () => {
+    if (!name.trim()) return
+    await saveExercise({ ...e, name: name.trim(), sets, reps })
+    onClose()
+  }
+  return (
+    <form className="st-dedit" onSubmit={(ev) => { ev.preventDefault(); save() }}>
+      <input value={name} onChange={(ev) => setName(ev.target.value)} aria-label="Exercise name" enterKeyHint="done" autoComplete="off" />
+      <div className="st-dedit-row">
+        <Mini label="Sets" value={sets} min={1} onChange={setSets} />
+        <Mini label="Reps" value={reps} min={0} onChange={setReps} show={(n) => (n ? String(n) : 'fail')} />
+      </div>
+      {shared.length > 0 && <p className="st-note">Also on {shared.join(', ')}, so it changes there too.</p>}
+      <div className="st-dedit-actions">
+        <button type="button" className="small danger" onClick={onRemove}>Remove from {dayShort}</button>
+        <span />
+        <button type="button" className="small" onClick={onClose}>Cancel</button>
+        <button type="submit" className="primary small" disabled={!name.trim()}>Save</button>
+      </div>
     </form>
+  )
+}
+
+/** Add an exercise: reuse one from another day (keeps its weight), or create a new one. */
+function AddToDay({ day, exercises, plan, onDone }: { day: PlanDay; exercises: Exercise[]; plan: PlanDay[]; onDone: () => void }) {
+  const [q, setQ] = useState('')
+  const [sets, setSets] = useState(3)
+  const [reps, setReps] = useState(10)
+  const [weight, setWeight] = useState('')
+  const pool = exercises.filter((e) => !day.exerciseIds.includes(e.id))
+  const hits = q.trim() ? searchByName(pool, q, 6) : []
+  const exact = pool.some((e) => e.name.toLowerCase() === q.trim().toLowerCase())
+  const where = (id: string) => plan.filter((p) => p.exerciseIds.includes(id)).map((p) => p.short).join(', ')
+  const create = async () => {
+    const n = q.trim()
+    if (!n) return
+    await addExerciseToDay(day.id, { id: `custom-${Date.now().toString(36)}`, name: n, sets, reps, weight: Number(weight) || 0, unit: 'kg', updatedAt: Date.now() })
+    onDone()
+  }
+  return (
+    <div className="st-dadd-card">
+      <div className="st-dadd-head">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Exercise name, e.g. Cable Crossover" aria-label="Exercise name" autoFocus enterKeyHint="search" autoComplete="off" />
+        <button className="small" onClick={onDone}>Cancel</button>
+      </div>
+      {hits.length > 0 && (
+        <>
+          <p className="st-dadd-label">From your other days</p>
+          <div className="st-dadd-hits">
+            {hits.map((e, i) => (
+              <button key={e.id} style={{ animationDelay: `${i * 30}ms` }} onClick={async () => { await addExerciseToDay(day.id, e); onDone() }}>
+                <b>{e.name}</b><small>{fmtWeight(e.weight)} {e.unit}{where(e.id) ? ` · ${where(e.id)}` : ''}</small>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {q.trim() && !exact && (
+        <div className="st-dnew">
+          <p className="st-dadd-label">New exercise</p>
+          <div className="st-dedit-row">
+            <Mini label="Sets" value={sets} min={1} onChange={setSets} />
+            <Mini label="Reps" value={reps} min={0} onChange={setReps} show={(n) => (n ? String(n) : 'fail')} />
+            <label className="st-step st-dnew-w"><span>Weight</span><input inputMode="decimal" value={weight} placeholder="kg" onChange={(e) => setWeight(e.target.value)} aria-label="Weight in kg" /></label>
+          </div>
+          <button className="primary st-dnew-go" onClick={create}>Add “{q.trim()}” to {day.short}</button>
+        </div>
+      )}
+    </div>
   )
 }
 

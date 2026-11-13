@@ -56,10 +56,14 @@ export default function App() {
     setAdding(true)
   }
 
-  if (adding) return <AddFood date={date} today={today} onClose={() => setAdding(false)} />
+  // Each tab has its own colour world (see index.css); on <html> so sheets and panels follow too.
+  useEffect(() => { document.documentElement.dataset.world = adding ? 'add' : tab }, [adding, tab])
+
+  if (adding) return <><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} /></div></>
 
   return (
     <div className="app">
+      <div className="aurora" aria-hidden="true" />
       <header className="appbar">
         <button className="logo-btn" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
           <Logo size={38} />

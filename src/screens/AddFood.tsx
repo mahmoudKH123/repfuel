@@ -6,9 +6,11 @@ import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
 import { formatDay } from '../logic/dates'
 import { askAi, photoToBase64 } from '../logic/ai'
+import { searchByName } from '../logic/search'
 import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
 import { useCountUp } from '../ui/motion'
+import { IconAi } from '../ui/icons'
 import { CATEGORIES, fmtAmount } from '../ui/format'
 import { availableUnits, convert, fmtQty, gramsFromLabel, quickAmounts, servingNoun, STEP, toBase, toStored, unitName, type AmountUnit, type UnitInfo } from '../logic/units'
 
@@ -73,7 +75,7 @@ export function AddFood({ date, today, onClose }: Props) {
   const q = query.trim().toLowerCase()
   const review = foods.filter((f) => f.needsReview).length
   // Category chips only filter the browse list; typing searches everything.
-  const matches = q ? foods.filter((f) => f.name.toLowerCase().includes(q)).slice(0, 40)
+  const matches = q ? searchByName(foods, q)
     : foods.filter((f) => cat === 'all' || (cat === 'review' ? f.needsReview : f.category === cat))
   const cats = CATEGORIES.filter((c) => foods.some((f) => f.category === c.value))
 
@@ -155,7 +157,7 @@ export function AddFood({ date, today, onClose }: Props) {
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.5" /></svg>
             </button>
             <button className="add-tool ai" onClick={() => setView({ kind: 'describe' })} aria-label="Describe your meal for AI">
-              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z" /><path d="M8 10h8M8 13h5" /></svg>
+              <IconAi size={23} />
             </button>
             <button className="add-tool pen" onClick={manual} aria-label="Enter numbers yourself">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M13.5 6.5l4 4" /></svg>
@@ -195,7 +197,7 @@ export function AddFood({ date, today, onClose }: Props) {
               <li style={{ animationDelay: `${0.04 * Math.min(matches.length, 8)}s` }} className={`add-card add-ai${matches.length ? '' : ' solo'}`}>
                 <button onClick={() => runAi('Estimating…', { mode: 'text', text: query.trim() })}>
                   <span className="add-ai-dot" aria-hidden="true">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M12 4v4M12 16v4M4 12h4M16 12h4" /></svg>
+                    <IconAi size={20} />
                   </span>
                   <span className="add-card-text">
                     <strong>Estimate “{query.trim()}”</strong>
@@ -296,11 +298,30 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   const editable = draft.source !== 'saved'
   const [name, setName] = useState(draft.name)
   const [vals, setVals] = useState({ kcal: num(draft.kcal), protein: num(draft.protein), carbs: num(draft.carbs), fat: num(draft.fat) })
-  const info: UnitInfo = { base: draft.unit, gramsPerServing: draft.gramsPerServing, liquid: !!draft.liquid }
+  // Manual entries pick what their numbers are per (1 serving / 100 g / 100 ml) and, optionally, a serving's weight.
+  const manual = draft.source === 'manual'
+  const [basis, setBasis] = useState<Basis>('serving')
+  const [weight, setWeight] = useState('')
+  const [weightUnit, setWeightUnit] = useState<'g' | 'ml'>('g')
+  const wUnit = basis === 'serving' ? weightUnit : basis
+  const eff = manual
+    ? {
+        unit: basis as Unit, baseAmount: basis === 'serving' ? 1 : 100,
+        servingLabel: basis === 'serving' ? '1 serving' : `100 ${basis}`,
+        gramsPerServing: Number(weight) > 0 ? Number(weight) : undefined, liquid: wUnit === 'ml',
+      }
+    : { unit: draft.unit, baseAmount: draft.baseAmount, servingLabel: draft.servingLabel, gramsPerServing: draft.gramsPerServing, liquid: !!draft.liquid }
+  const info: UnitInfo = { base: eff.unit, gramsPerServing: eff.gramsPerServing, liquid: eff.liquid }
   const units = availableUnits(info)
-  const noun = servingNoun(draft.servingLabel)
+  const noun = servingNoun(eff.servingLabel)
   const [unit, setUnit] = useState<AmountUnit>(draft.unit === 'spray' ? 'spray' : draft.unit)
   const [amount, setAmount] = useState(String(draft.amount))
+  // Changing the basis or weight can remove the unit in use; fall back to the first one that still works.
+  const setManual = (b: Basis, w: string, wu: 'g' | 'ml') => {
+    setBasis(b); setWeight(w); setWeightUnit(wu); setError('')
+    const next = availableUnits({ base: b, gramsPerServing: Number(w) > 0 ? Number(w) : undefined, liquid: (b === 'serving' ? wu : b) === 'ml' })
+    if (!next.includes(unit)) { setUnit(next[0]); setAmount(String(next[0] === 'serving' ? 1 : 100)) }
+  }
   const [editing, setEditing] = useState(draft.source === 'manual')
   const [save, setSave] = useState(draft.source !== 'manual')
   const [error, setError] = useState('')
@@ -308,7 +329,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   const base: Macros = { kcal: Number(vals.kcal || 0), protein: Number(vals.protein || 0), carbs: Number(vals.carbs || 0), fat: Number(vals.fat || 0) }
   const amt = Number(amount)
   const baseAmt = toBase(amt, unit, info)
-  const portion = scaleFood({ ...base, baseAmount: draft.baseAmount }, baseAmt)
+  const portion = scaleFood({ ...base, baseAmount: eff.baseAmount }, baseAmt)
   const step = STEP[unit]
   const bump = (d: number) => setAmount(String(Math.max(0, Math.round((amt + d) * 100) / 100)))
   const switchUnit = (u: AmountUnit) => {
@@ -337,13 +358,14 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
     let foodId = draft.food?.id
     if (draft.source !== 'saved') {
       // Keep the serving weight in the label, so this food can switch units next time too.
-      const gps = draft.gramsPerServing
-      const label = draft.unit === 'serving' && gps && !gramsFromLabel(draft.servingLabel)
-        ? `${draft.servingLabel} (${Math.round(gps)}${draft.liquid ? 'ml' : 'g'})` : draft.servingLabel
+      const gps = eff.gramsPerServing
+      const label = gps && !gramsFromLabel(eff.servingLabel)
+        ? eff.unit === 'serving' ? `${eff.servingLabel} (${Math.round(gps)}${eff.liquid ? 'ml' : 'g'})` : `1 serving, ${Math.round(gps)}${eff.liquid ? 'ml' : 'g'}`
+        : eff.servingLabel
       if (save) foodId = await saveFood({
         name: name.trim(),
         category: draft.source === 'label' ? 'branded' : 'custom',
-        baseAmount: draft.baseAmount, unit: draft.unit, servingLabel: label,
+        baseAmount: eff.baseAmount, unit: eff.unit, servingLabel: label,
         estimate: draft.estimate, note: draft.note || undefined, ...base,
       })
     }
@@ -421,9 +443,30 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
       {editable && (
         <div className="card add-edit">
           <button type="button" className="add-edit-toggle" onClick={() => setEditing((v) => !v)} aria-expanded={editing}>
-            <span>Numbers per {draft.servingLabel}</span>
+            <span>Numbers per {eff.servingLabel}</span>
             <span className="muted">{editing ? 'Done' : 'Edit'}</span>
           </button>
+          {editing && manual && (
+            <>
+              <div className="unit-seg" role="radiogroup" aria-label="Numbers are per" style={{ '--n': 3, '--i': BASES.indexOf(basis) } as CSSProperties}>
+                <span className="unit-thumb" aria-hidden="true" />
+                {BASES.map((b) => (
+                  <button type="button" role="radio" key={b} aria-checked={b === basis} onClick={() => setManual(b, weight, weightUnit)}>{b === 'serving' ? '1 serving' : `100 ${b}`}</button>
+                ))}
+              </div>
+              <label className="add-weight">
+                <span>{basis === 'serving' ? '1 serving weighs' : '1 serving is'} <em>optional</em></span>
+                <input type="number" inputMode="decimal" step="any" min="0" value={weight} placeholder="–" onChange={(e) => setManual(basis, e.target.value, weightUnit)} aria-label={`Serving weight in ${wUnit}`} />
+                {basis === 'serving' ? (
+                  <span className="add-weight-units">
+                    {(['g', 'ml'] as const).map((u) => (
+                      <button type="button" key={u} aria-pressed={weightUnit === u} onClick={() => setManual(basis, weight, u)}>{u}</button>
+                    ))}
+                  </span>
+                ) : <b>{basis}</b>}
+              </label>
+            </>
+          )}
           {editing && (
             <div className="grid4 add-edit-grid">
               {(['kcal', 'protein', 'carbs', 'fat'] as const).map((key) => (
@@ -452,6 +495,8 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
 }
 
 const num = (v: number) => (v ? String(v) : '')
+type Basis = 'serving' | 'g' | 'ml'
+const BASES: Basis[] = ['serving', 'g', 'ml']
 
 function MacroLine({ index, label, color, grams, total }: { index: number; label: string; color: string; grams: number; total: number }) {
   const w = useCountUp(total ? grams / total : 0, 800, 250 + index * 90)
@@ -475,7 +520,7 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
     <form className="add-describe" onSubmit={(e) => { e.preventDefault(); go() }}>
       <div className="add-describe-head">
         <span className="add-ai-dot big" aria-hidden="true">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5z" /><path d="M8 10h8M8 13h5" /></svg>
+          <IconAi size={30} />
         </span>
         <h2>Describe your meal</h2>
         <p className="muted">Say what and how much. AI leans high to keep you safe.</p>

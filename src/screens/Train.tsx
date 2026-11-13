@@ -5,7 +5,7 @@ import { db } from '../db/db'
 import type { Exercise, PlanDay, WeekPlan, WeightUnit } from '../db/types'
 import { addExerciseToDay, ensureWeek, removeExerciseFromDay, saveExercise, saveWeek, toggleExerciseDone } from '../db/repo'
 import { addDays, formatDay } from '../logic/dates'
-import { applyWeights, fmtWeight, recordAttempt, startAttempt, volumeKg } from '../logic/train'
+import { applyWeights, cancelAttempt, fmtWeight, recordAttempt, startAttempt, volumeKg } from '../logic/train'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, findFrom, missedDays, mondayOf, reshuffle, type Reshuffle } from '../logic/schedule'
 import { useCountUp } from '../ui/motion'
 import { WeightDial, type DialMode } from '../ui/WeightDial'
@@ -418,10 +418,27 @@ function ExerciseCard({ e, index, done, editing, onToggle, onRemove }: {
 function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from: number) => void; onEditGoal: () => void }) {
   const [open, setOpen] = useState(false)
   const [reps, setReps] = useState(e.next?.reps ?? 0)
+  // Cancel: one tap when nothing is logged yet; with reps logged, the x first asks "Cancel?" for 3s.
+  const [ask, setAsk] = useState(false)
+  const [leaving, setLeaving] = useState(false)
+  useEffect(() => {
+    if (!ask) return
+    const id = window.setTimeout(() => setAsk(false), 3000)
+    return () => window.clearTimeout(id)
+  }, [ask])
 
   if (!e.next) {
     if (!e.reps) return null
     return <button className="tr-try" onClick={() => saveExercise(startAttempt(e))}>+ Try heavier</button>
+  }
+  const cancel = () => {
+    if (leaving) return
+    if (e.next?.reps && !ask) return setAsk(true)
+    setAsk(false)
+    setLeaving(true)
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    // Let the drain + fold play out, then drop the goal.
+    window.setTimeout(async () => { await saveExercise(cancelAttempt(e)); setLeaving(false); setOpen(false) }, reduced ? 0 : 560)
   }
   const target = e.reps || 1
   const n = Math.min(open ? reps : e.next.reps, target)
@@ -434,7 +451,8 @@ function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from:
   const hits = reps >= target
 
   return (
-    <div className={`tr-ol${open ? ' open' : ''}`}>
+    <div className={`tr-ol${open ? ' open' : ''}${leaving ? ' leaving' : ''}`} style={{ '--n': target } as CSSProperties}>
+      <div className="tr-ol-top">
       <button className="tr-ol-row" onClick={() => { setReps(e.next?.reps ?? 0); setOpen((v) => !v) }} aria-expanded={open}>
         <span className="tr-ol-w">
           <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" /></svg>
@@ -442,12 +460,17 @@ function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from:
         </span>
         <span className="tr-ol-bar" style={{ '--n': target } as CSSProperties} aria-label={`${e.next.reps} of ${target} reps`}>
           {Array.from({ length: target }, (_, i) => (
-            <i key={i} className={i < n ? 'on' : ''} style={{ animationDelay: `${200 + i * 40}ms` }} />
+            <i key={i} className={i < n ? 'on' : ''} style={{ animationDelay: leaving ? `${(target - 1 - i) * 22}ms` : `${200 + i * 40}ms` }} />
           ))}
         </span>
         <span className="tr-ol-n">{(open ? reps : e.next.reps) ? <><b>{open ? reps : e.next.reps}</b>/{target}</> : 'new'}</span>
       </button>
-      {open && (
+      <button className={`tr-ol-x${ask ? ' ask' : ''}`} onClick={cancel} aria-label={ask ? 'Tap again to cancel the heavier goal' : 'Cancel the heavier goal'}>
+        <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
+        <span>Cancel?</span>
+      </button>
+      </div>
+      {open && !leaving && (
         <div className="tr-ol-edit">
           <button className="tr-ol-goal" onClick={onEditGoal} aria-label="Change goal weight">Reps at <b>{fmtWeight(e.next.weight)}{e.unit}</b></button>
           <div className="tr-ol-step">

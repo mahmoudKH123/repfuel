@@ -23,6 +23,11 @@ export function recordAttempt(e: Exercise, reps: number, now = Date.now()): Atte
   return { leveledUp: false, exercise: { ...e, next: { ...e.next, reps: Math.max(0, reps) }, updatedAt: now } }
 }
 
+/** Drops the heavier goal (changed your mind); the working weight stays as it is. */
+export function cancelAttempt(e: Exercise, now = Date.now()): Exercise {
+  return { ...e, next: undefined, updatedAt: now }
+}
+
 export function startAttempt(e: Exercise, now = Date.now()): Exercise {
   const next: Attempt = { weight: e.weight + stepFor(e), reps: 0 }
   return { ...e, next, updatedAt: now }

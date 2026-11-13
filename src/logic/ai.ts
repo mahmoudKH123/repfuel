@@ -34,7 +34,7 @@ export async function askAi(req: { mode: 'text'; text: string } | { mode: 'label
   if (isMock()) return mock(req.mode)
   if (!AI_URL) throw new Error('AI is not set up yet.')
   const pass = getPass()
-  if (!pass) throw new Error('Enter your AI passcode in More first.')
+  if (!pass) throw new Error('Enter your AI passcode in Settings → AI first.')
   let res: Response
   try {
     res = await fetch(AI_URL, {

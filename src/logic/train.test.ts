@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyWeights, recordAttempt, startAttempt, volumeKg } from './train'
+import { applyWeights, cancelAttempt, recordAttempt, startAttempt, volumeKg } from './train'
 import type { Exercise } from '../db/types'
 
 const ex: Exercise = { id: 'sp', name: 'Shoulder Press', sets: 3, reps: 10, weight: 55, unit: 'kg', next: { weight: 60, reps: 8 }, updatedAt: 0 }
@@ -20,6 +20,12 @@ describe('progressive overload', () => {
   it('starts a heavier attempt', () => {
     expect(startAttempt({ ...ex, next: undefined }).next).toEqual({ weight: 60, reps: 0 })
     expect(startAttempt({ ...ex, weight: 15, next: undefined }).next).toEqual({ weight: 17.5, reps: 0 })
+  })
+  it('cancels a heavier attempt and keeps the working weight', () => {
+    const c = cancelAttempt({ ...ex, next: { weight: 60, reps: 4 } })
+    expect(c.next).toBeUndefined()
+    expect(c.weight).toBe(ex.weight)
+    expect(startAttempt(c).next).toEqual({ weight: ex.weight + 5, reps: 0 })
   })
   it('counts volume in kg', () => {
     expect(volumeKg([ex])).toBe(1650)

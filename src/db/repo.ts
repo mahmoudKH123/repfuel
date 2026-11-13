@@ -158,6 +158,11 @@ export async function saveTrainingWeek(days: string[], thisWeek: boolean, today:
   await saveWeek({ ...plan, days: next, owed: days.filter((d, i) => d !== 'rest' && i >= start), blocked: [], dropped: [], missed: plan.missed.filter((i) => i < ti), declined: false }, today)
 }
 
+/** Sets the order of a day's exercises. */
+export async function reorderDay(id: string, exerciseIds: string[]): Promise<void> {
+  await db.plan.update(id, { exerciseIds })
+}
+
 export async function renamePlanDay(id: string, name: string, short: string): Promise<void> {
   await db.plan.update(id, { name, short })
 }

@@ -21,3 +21,13 @@ export const IconTrain = () => (
 export const IconSettings = () => (
   <svg {...base}><circle cx="12" cy="12" r="3" /><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" /></svg>
 )
+
+/** RepFuel AI mark: a food bowl with a sparkle rising from it. */
+export const IconAi = ({ size = 24 }: { size?: number }) => (
+  <svg {...base} width={size} height={size}>
+    <path d="M3.5 13.5h17a8.5 6.5 0 0 1-17 0z" />
+    <path d="M9.5 21h5" />
+    <path d="M11 2.8c.35 1.9 1 2.55 2.9 2.9-1.9.35-2.55 1-2.9 2.9-.35-1.9-1-2.55-2.9-2.9 1.9-.35 2.55-1 2.9-2.9z" fill="currentColor" strokeWidth={1.2} />
+    <path d="M16.6 6.6c.2.95.55 1.3 1.5 1.5-.95.2-1.3.55-1.5 1.5-.2-.95-.55-1.3-1.5-1.5.95-.2 1.3-.55 1.5-1.5z" fill="currentColor" strokeWidth={1} />
+  </svg>
+)
