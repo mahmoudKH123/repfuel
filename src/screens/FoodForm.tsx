@@ -1,61 +1,11 @@
 import { useState } from 'react'
-import { useLiveQuery } from 'dexie-react-hooks'
-import { db } from '../db/db'
 import { archiveFood, saveFood } from '../db/repo'
 import type { Food, FoodCategory, Unit } from '../db/types'
+import { CATEGORIES } from '../ui/format'
 import { kcalFromMacros, kcalLooksWrong } from '../logic/macros'
-import { fmtAmount, fmtMacros } from '../ui/format'
 
-const CATEGORIES: { value: FoodCategory; label: string }[] = [
-  { value: 'branded', label: 'Branded' },
-  { value: 'home', label: 'Home' },
-  { value: 'combo', label: 'Meals' },
-  { value: 'restaurant', label: 'Restaurant' },
-  { value: 'custom', label: 'Custom' },
-]
-
-export function Foods() {
-  const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
-  const [query, setQuery] = useState('')
-  const [cat, setCat] = useState<FoodCategory | 'all'>('all')
-  const [editing, setEditing] = useState<Partial<Food> | null>(null)
-
-  const q = query.trim().toLowerCase()
-  const shown = foods.filter((f) => (cat === 'all' || f.category === cat) && (!q || f.name.toLowerCase().includes(q)))
-  const review = foods.filter((f) => f.needsReview).length
-
-  if (editing) return <FoodForm food={editing} onDone={() => setEditing(null)} />
-
-  return (
-    <section>
-      <header className="row">
-        <h1>My foods</h1>
-        <button className="primary" onClick={() => setEditing({ category: 'custom', unit: 'serving', baseAmount: 1, estimate: false })}>New food</button>
-      </header>
-      <input type="search" placeholder="Search your foods" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search foods" />
-      <div className="row wrap">
-        <button aria-pressed={cat === 'all'} onClick={() => setCat('all')}>All {foods.length}</button>
-        {CATEGORIES.map((c) => (
-          <button key={c.value} aria-pressed={cat === c.value} onClick={() => setCat(c.value)}>{c.label}</button>
-        ))}
-      </div>
-      {review > 0 && <p className="warn">{review} food{review === 1 ? ' needs' : 's need'} a numbers check.</p>}
-      <ul className="list">
-        {shown.map((f) => (
-          <li key={f.id}>
-            <button className="item" onClick={() => setEditing(f)}>
-              <strong>{f.name}{f.estimate && <span className="tag">estimate</span>}{f.needsReview && <span className="tag warn">check</span>}</strong>
-              <span className="muted">{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)} · {fmtMacros(f)}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {shown.length === 0 && <p className="muted">No foods match. Add it with New food.</p>}
-    </section>
-  )
-}
-
-function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => void }) {
+/** Edit or delete a saved food. Opened from a saved food in Add food. */
+export function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => void }) {
   const [f, setF] = useState({
     name: food.name ?? '',
     category: food.category ?? 'custom',
@@ -104,11 +54,7 @@ function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => void })
   }
 
   return (
-    <section>
-      <header className="row">
-        <h1>{food.id ? 'Edit food' : 'New food'}</h1>
-        <button onClick={onDone}>Cancel</button>
-      </header>
+    <section className="add-form">
       {food.needsReview && <p className="warn">{food.note ?? 'Check these numbers.'}</p>}
       <form onSubmit={(e) => { e.preventDefault(); save() }}>
         <label>Name<input value={f.name} onChange={(e) => set('name', e.target.value)} /></label>

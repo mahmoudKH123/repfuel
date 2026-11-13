@@ -1,6 +1,9 @@
 import { db } from './db'
 import { DEFAULT_SETTINGS } from './defaults'
-import type { DayType, Entry, Food, Settings } from './types'
+import type { DayType, Entry, Exercise, Food, Settings, WeekPlan } from './types'
+import { defaultDayType } from '../logic/budget'
+import { addDays } from '../logic/dates'
+import { dayIndex, mondayOf, newWeek, restWeekdays } from '../logic/schedule'
 import { scaleFood } from '../logic/macros'
 
 /** All reads and writes the screens need. Screens never touch Dexie tables directly. */
@@ -76,4 +79,85 @@ export async function logWeight(date: string, kg: number): Promise<void> {
 
 export async function deleteWeight(date: string): Promise<void> {
   await db.weights.delete(date)
+}
+
+/* ---------- Training ---------- */
+
+export async function saveExercise(e: Exercise): Promise<void> {
+  await db.exercises.put({ ...e, updatedAt: Date.now() })
+}
+
+/** Ticks or unticks an exercise for today; marks the day finished when every exercise is done. */
+export async function toggleExerciseDone(date: string, dayId: string, exerciseId: string, all: string[]): Promise<boolean> {
+  return db.transaction('rw', db.sessions, async () => {
+    const s = (await db.sessions.get(date)) ?? { date, dayId, done: [] }
+    const set = new Set(s.dayId === dayId ? s.done : [])
+    if (set.has(exerciseId)) set.delete(exerciseId)
+    else set.add(exerciseId)
+    const done = all.filter((id) => set.has(id))
+    const finished = all.length > 0 && done.length === all.length
+    const was = s.dayId === dayId ? s.finishedAt : undefined
+    await db.sessions.put({ date, dayId, done, finishedAt: finished ? (was ?? Date.now()) : undefined })
+    return finished && !was
+  })
+}
+
+/** This week's schedule, created from the default week the first time it's opened. */
+export async function ensureWeek(week: string, today: string): Promise<WeekPlan> {
+  const have = await db.weeks.get(week)
+  if (have) return have
+  const plan = newWeek(week, today, (await getSettings()).trainingWeek)
+  await saveWeek(plan, today)
+  return plan
+}
+
+/**
+ * Saves the week and makes Today/Week calorie targets follow it: rest in the plan = rest-day targets.
+ * Only today and later are touched, so past days keep the targets they were logged against.
+ */
+export async function saveWeek(plan: WeekPlan, today: string): Promise<void> {
+  const settings = await getSettings()
+  await db.transaction('rw', db.weeks, db.days, async () => {
+    await db.weeks.put(plan)
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(plan.week, i)
+      if (date < today) continue
+      await setDayType(date, plan.days[i] === 'rest' ? 'rest' : 'training', defaultDayType(date, settings))
+    }
+  })
+}
+
+export async function addExerciseToDay(dayId: string, e: Exercise): Promise<void> {
+  await db.transaction('rw', db.exercises, db.plan, async () => {
+    await db.exercises.put({ ...e, updatedAt: Date.now() })
+    const day = await db.plan.get(dayId)
+    if (day && !day.exerciseIds.includes(e.id)) await db.plan.update(dayId, { exerciseIds: [...day.exerciseIds, e.id] })
+  })
+}
+
+/** Removes an exercise from one day only; the lift and its progress stay for other days. */
+export async function removeExerciseFromDay(dayId: string, exerciseId: string): Promise<void> {
+  const day = await db.plan.get(dayId)
+  if (day) await db.plan.update(dayId, { exerciseIds: day.exerciseIds.filter((id) => id !== exerciseId) })
+}
+
+/**
+ * Saves your normal Mon–Sun week. Food rest days follow its rest days.
+ * With `thisWeek`, today and the rest of this week switch to it too (days already trained stay).
+ */
+export async function saveTrainingWeek(days: string[], thisWeek: boolean, today: string): Promise<void> {
+  const settings = await getSettings()
+  await saveSettings({ ...settings, trainingWeek: days, defaultRestDays: restWeekdays(days) })
+  if (!thisWeek) return
+  const week = mondayOf(today)
+  const plan = await ensureWeek(week, today)
+  const ti = dayIndex(week, today)
+  const trained = new Set((await db.sessions.where('date').between(week, today, true, true).toArray()).filter((x) => x.done.length).map((x) => dayIndex(week, x.date)))
+  const next = plan.days.map((d, i) => (i < ti || trained.has(i) ? d : days[i]))
+  const start = Math.max(0, dayIndex(week, plan.startedOn))
+  await saveWeek({ ...plan, days: next, owed: days.filter((d, i) => d !== 'rest' && i >= start), blocked: [], dropped: [], missed: plan.missed.filter((i) => i < ti), declined: false }, today)
+}
+
+export async function renamePlanDay(id: string, name: string, short: string): Promise<void> {
+  await db.plan.update(id, { name, short })
 }

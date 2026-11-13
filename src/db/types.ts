@@ -57,9 +57,75 @@ export interface Settings {
   /** JS weekday numbers (0 = Sunday) that are rest days by default. */
   defaultRestDays: number[]
   referenceWeightKg: number
+  /** Name shown in the greeting. */
+  name?: string
+  /** Normal Mon..Sun training week (plan day ids or 'rest'); new weeks start from it. */
+  trainingWeek?: string[]
 }
 
 export interface SettingRow {
   key: 'settings'
   value: Settings
+}
+
+/* ---------- Training ---------- */
+
+export type WeightUnit = 'kg' | 'lbs'
+
+/** A heavier weight being worked towards, e.g. "60-8" = tried 60 kg and got 8 reps. */
+export interface Attempt {
+  weight: number
+  reps: number
+}
+
+/** One lift. Shared by every plan day that lists it, so progress shows everywhere. */
+export interface Exercise {
+  id: string
+  name: string
+  sets: number
+  /** Target reps per set; 0 means "to failure". */
+  reps: number
+  weight: number
+  unit: WeightUnit
+  /** Second weight for drop sets, e.g. wrist curls 55 then 30. */
+  dropWeight?: number
+  next?: Attempt
+  updatedAt: number
+}
+
+export interface PlanDay {
+  id: string
+  name: string
+  short: string
+  order: number
+  exerciseIds: string[]
+}
+
+/** One row per calendar day you opened a workout on. */
+export interface TrainSession {
+  date: string
+  /** Plan day id that was trained. */
+  dayId: string
+  done: string[]
+  finishedAt?: number
+}
+
+/** One Monday-to-Sunday week of the training schedule (created on first open, reshuffled on skips). */
+export interface WeekPlan {
+  /** Monday, YYYY-MM-DD */
+  week: string
+  /** First day the app tracked this week; workouts before it are not owed. */
+  startedOn: string
+  /** Mon..Sun: plan day id or 'rest'. */
+  days: string[]
+  /** Workouts to fit into this week. */
+  owed: string[]
+  /** Workouts skipped this week after you confirmed. */
+  dropped: string[]
+  /** Day indexes you said you can't train. */
+  blocked: number[]
+  /** Day indexes already handled as missed (so they're not reshuffled twice). */
+  missed: number[]
+  /** You chose to sort out an overflow yourself; don't ask again this week. */
+  declined?: boolean
 }

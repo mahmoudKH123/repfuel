@@ -4,6 +4,9 @@ import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App'
 import { ensureSeeded } from './db/db'
+import { ensureWeek } from './db/repo'
+import { todayKey } from './logic/dates'
+import { mondayOf } from './logic/schedule'
 
 // Ask the browser not to evict our data under storage pressure (granted for Home Screen apps on iOS).
 navigator.storage?.persist?.().catch(() => {})
@@ -13,6 +16,8 @@ registerSW({ immediate: true })
 
 const root = createRoot(document.getElementById('root')!)
 ensureSeeded()
+  // Create this week's training schedule early so Today's training/rest day follows it.
+  .then(() => ensureWeek(mondayOf(todayKey()), todayKey()))
   .catch((err) => console.error('Seeding failed', err))
   .finally(() => {
     root.render(

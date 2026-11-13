@@ -19,8 +19,11 @@ function apply(t: Theme) {
   document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute('content', BAR[t]))
 }
 
-/** Light/dark theme: follows the phone until the user picks one by tapping the logo, then remembers it. */
-export function useTheme(): [Theme, () => void] {
+export type ThemeMode = 'auto' | Theme
+
+/** Light/dark theme: follows the phone ('auto') until the user picks one (logo tap or Settings), then remembers it. */
+export function useTheme(): [Theme, () => void, ThemeMode, (m: ThemeMode) => void] {
+  const [mode, setModeState] = useState<ThemeMode>(() => saved() ?? 'auto')
   const [theme, setTheme] = useState<Theme>(() => saved() ?? system())
 
   useEffect(() => { apply(theme) }, [theme])
@@ -32,15 +35,21 @@ export function useTheme(): [Theme, () => void] {
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
-  const toggle = () => {
-    const next: Theme = theme === 'dark' ? 'light' : 'dark'
-    try { localStorage.setItem(KEY, next) } catch { /* private mode: applies for this visit only */ }
+  const setMode = (m: ThemeMode) => {
+    try {
+      if (m === 'auto') localStorage.removeItem(KEY)
+      else localStorage.setItem(KEY, m)
+    } catch { /* private mode: applies for this visit only */ }
+    setModeState(m)
+    const next: Theme = m === 'auto' ? system() : m
+    if (next === theme) return
     const run = () => { apply(next); setTheme(next) }
     const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown }
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
     if (doc.startViewTransition && !reduced) doc.startViewTransition(run)
     else run()
   }
+  const toggle = () => setMode(theme === 'dark' ? 'light' : 'dark')
 
-  return [theme, toggle]
+  return [theme, toggle, mode, setMode]
 }

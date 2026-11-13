@@ -2,13 +2,14 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import { deleteEntry, logFood, logQuick, saveFood } from '../db/repo'
-import type { Food, Macros, Unit } from '../db/types'
+import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
 import { formatDay } from '../logic/dates'
 import { askAi, photoToBase64 } from '../logic/ai'
+import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
 import { useCountUp } from '../ui/motion'
-import { fmtAmount } from '../ui/format'
+import { CATEGORIES, fmtAmount } from '../ui/format'
 import { availableUnits, convert, fmtQty, gramsFromLabel, quickAmounts, servingNoun, STEP, toBase, toStored, unitName, type AmountUnit, type UnitInfo } from '../logic/units'
 
 interface Props {
@@ -35,7 +36,7 @@ interface Draft extends Macros {
   liquid?: boolean
 }
 
-type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'busy'; label: string; photo?: string } | { kind: 'detail'; draft: Draft }
+type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string; photo?: string } | { kind: 'detail'; draft: Draft }
 
 export function AddFood({ date, today, onClose }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
@@ -51,11 +52,15 @@ export function AddFood({ date, today, onClose }: Props) {
   const day = week?.days.find((d) => d.date === date)
 
   const [query, setQuery] = useState('')
+  const [cat, setCat] = useState<FoodCategory | 'all' | 'review'>('all')
   const [view, setView] = useState<View>({ kind: 'home' })
   const [error, setError] = useState('')
   const [toast, setToast] = useState<{ text: string; entryId: number } | null>(null)
   const [done, setDone] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Each view starts at the top (the edit form otherwise opens where the detail was scrolled to).
+  useEffect(() => { window.scrollTo(0, 0) }, [view.kind])
 
   useEffect(() => {
     if (!toast) return
@@ -66,7 +71,11 @@ export function AddFood({ date, today, onClose }: Props) {
   const byId = new Map(foods.map((f) => [f.id!, f]))
   const recent = recentIds.map((id) => byId.get(id)).filter((f): f is Food => !!f).slice(0, 8)
   const q = query.trim().toLowerCase()
-  const matches = q ? foods.filter((f) => f.name.toLowerCase().includes(q)).slice(0, 40) : foods
+  const review = foods.filter((f) => f.needsReview).length
+  // Category chips only filter the browse list; typing searches everything.
+  const matches = q ? foods.filter((f) => f.name.toLowerCase().includes(q)).slice(0, 40)
+    : foods.filter((f) => cat === 'all' || (cat === 'review' ? f.needsReview : f.category === cat))
+  const cats = CATEGORIES.filter((c) => foods.some((f) => f.category === c.value))
 
   const dayLabel = date === today ? 'Today' : formatDay(date, { weekday: 'short', day: 'numeric', month: 'short' })
 
@@ -127,7 +136,7 @@ export function AddFood({ date, today, onClose }: Props) {
         <button className="add-back" onClick={back} aria-label={view.kind === 'home' ? 'Close' : 'Back'}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
         </button>
-        <h1>Add food</h1>
+        <h1>{view.kind === 'edit' ? 'Edit food' : 'Add food'}</h1>
         <span className="add-day">{dayLabel}</span>
       </header>
 
@@ -168,7 +177,16 @@ export function AddFood({ date, today, onClose }: Props) {
             </>
           )}
 
-          <h2 className="add-h">{q ? (matches.length ? 'Your foods' : 'No saved match') : 'Your foods'}</h2>
+          <h2 className="add-h">{q ? (matches.length ? 'Your foods' : 'No saved match') : <>Your foods <span>{foods.length}</span></>}</h2>
+          {!q && (
+            <div className="add-chips add-cats">
+              <button aria-pressed={cat === 'all'} onClick={() => setCat('all')}>All</button>
+              {review > 0 && <button className="add-cat-review" aria-pressed={cat === 'review'} onClick={() => setCat('review')}>Check {review}</button>}
+              {cats.map((c) => (
+                <button key={c.value} aria-pressed={cat === c.value} onClick={() => setCat(c.value)}>{c.label}</button>
+              ))}
+            </div>
+          )}
           <ul className="add-list">
             {matches.map((f, i) => (
               <FoodCard key={f.id} food={f} index={i} dayTarget={day?.target.kcal ?? 2000} onOpen={() => open(f)} />
@@ -194,6 +212,10 @@ export function AddFood({ date, today, onClose }: Props) {
         <Describe initial={query.trim()} onEstimate={(text) => runAi('Estimating…', { mode: 'text', text })} />
       )}
 
+      {view.kind === 'edit' && (
+        <FoodForm food={view.food} onDone={() => setView({ kind: 'home' })} />
+      )}
+
       {view.kind === 'busy' && (
         <div className="add-busy">
           {view.photo && <img src={view.photo} alt="" className="add-photo" />}
@@ -203,7 +225,7 @@ export function AddFood({ date, today, onClose }: Props) {
       )}
 
       {view.kind === 'detail' && (
-        <Detail key={view.draft.name + view.draft.source} draft={view.draft} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
+        <Detail key={view.draft.name + view.draft.source} draft={view.draft} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} onEdit={view.draft.food ? () => setView({ kind: 'edit', food: view.draft.food! }) : undefined} />
       )}
 
       {toast && (
@@ -246,7 +268,7 @@ function FoodCard({ food: f, index, dayTarget, onOpen }: { food: Food; index: nu
           {share > 0.004 && <circle cx="19" cy="19" r={r} className="wk-ring-arc" strokeDasharray={`${share * c} ${c}`} />}
         </svg>
         <span className="add-card-text">
-          <strong>{f.name}{f.estimate && <span className="tag">est</span>}</strong>
+          <strong>{f.name}{f.estimate && <span className="tag">est</span>}{f.needsReview && <span className="tag warn">check</span>}</strong>
           <small>{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)}</small>
           <span className="add-ribbon" style={blend(f)} aria-hidden="true" />
         </span>
@@ -270,7 +292,7 @@ function labelGrams(f: Food): { gramsPerServing?: number; liquid?: boolean } {
   return {}
 }
 
-function Detail({ draft, eaten, target, date, onDone }: { draft: Draft; eaten: number; target: number; date: string; onDone: () => void }) {
+function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; eaten: number; target: number; date: string; onDone: () => void; onEdit?: () => void }) {
   const editable = draft.source !== 'saved'
   const [name, setName] = useState(draft.name)
   const [vals, setVals] = useState({ kcal: num(draft.kcal), protein: num(draft.protein), carbs: num(draft.carbs), fat: num(draft.fat) })
@@ -414,6 +436,13 @@ function Detail({ draft, eaten, target, date, onDone }: { draft: Draft; eaten: n
           {kcalLooksWrong(base) && <p className="warn">Calories don't match the macros. Double-check.</p>}
           <label className="check"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />Save to my foods</label>
         </div>
+      )}
+
+      {onEdit && (
+        <button type="button" className="card add-edit-saved" onClick={onEdit}>
+          <span>Edit or delete this food</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+        </button>
       )}
 
       {error && <p className="warn add-error">{error}</p>}

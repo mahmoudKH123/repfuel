@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
-import type { DayOverride, Entry, Food, SettingRow, WeightLog } from './types'
+import type { DayOverride, Entry, Exercise, Food, PlanDay, SettingRow, TrainSession, WeekPlan, WeightLog } from './types'
+import { SEED_EXERCISES, SEED_PLAN } from './workoutSeed'
 import { REMOVED_SEED_KEYS, SEED_FOODS, SEED_VERSION } from './seedFoods'
 import { DEFAULT_SETTINGS } from './defaults'
 
@@ -10,6 +11,10 @@ export class RepFuelDB extends Dexie {
   weights!: EntityTable<WeightLog, 'date'>
   settings!: EntityTable<SettingRow, 'key'>
   meta!: EntityTable<{ key: string; value: number }, 'key'>
+  exercises!: EntityTable<Exercise, 'id'>
+  plan!: EntityTable<PlanDay, 'id'>
+  sessions!: EntityTable<TrainSession, 'date'>
+  weeks!: EntityTable<WeekPlan, 'week'>
 
   constructor(name = 'repfuel') {
     super(name)
@@ -22,6 +27,13 @@ export class RepFuelDB extends Dexie {
       settings: 'key',
       meta: 'key',
     })
+    // v2: training plan (exercises shared across days), one session per trained day, one schedule per Mon–Sun week.
+    this.version(2).stores({
+      exercises: 'id',
+      plan: 'id, order',
+      sessions: 'date',
+      weeks: 'week',
+    })
   }
 }
 
@@ -32,6 +44,7 @@ export const db = new RepFuelDB()
  * it never overwrites foods the user has edited and never re-adds ones they deleted.
  */
 export async function ensureSeeded(database: RepFuelDB = db): Promise<void> {
+  await ensureWorkoutSeeded(database)
   await database.transaction('rw', database.foods, database.settings, database.meta, async () => {
     const seeded = (await database.meta.get('seedVersion'))?.value ?? 0
     if (!(await database.settings.get('settings'))) {
@@ -59,5 +72,18 @@ export async function ensureSeeded(database: RepFuelDB = db): Promise<void> {
       }
     }
     await database.meta.put({ key: 'seedVersion', value: SEED_VERSION })
+  })
+}
+
+/** Adds the workout plan once. Never overwrites edits; runs again only if the plan was wiped (e.g. old backup restored). */
+export async function ensureWorkoutSeeded(database: RepFuelDB = db): Promise<void> {
+  await database.transaction('rw', database.exercises, database.plan, database.meta, async () => {
+    if ((await database.meta.get('workoutSeed'))?.value && (await database.plan.count())) return
+    if (!(await database.plan.count())) {
+      const now = Date.now()
+      await database.exercises.bulkPut(SEED_EXERCISES.map((e) => ({ ...e, updatedAt: now })))
+      await database.plan.bulkPut(SEED_PLAN)
+    }
+    await database.meta.put({ key: 'workoutSeed', value: 1 })
   })
 }

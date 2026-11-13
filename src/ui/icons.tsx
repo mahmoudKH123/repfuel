@@ -15,3 +15,9 @@ export const IconMore = () => (
 export const IconPlus = () => (
   <svg {...base} strokeWidth={2.6}><path d="M12 5v14M5 12h14" /></svg>
 )
+export const IconTrain = () => (
+  <svg {...base}><path d="M6.5 7v10M17.5 7v10M3.5 9.5v5M20.5 9.5v5M6.5 12h11" /></svg>
+)
+export const IconSettings = () => (
+  <svg {...base}><circle cx="12" cy="12" r="3" /><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7" /></svg>
+)

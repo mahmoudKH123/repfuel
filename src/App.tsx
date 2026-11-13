@@ -2,19 +2,20 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import { todayKey } from './logic/dates'
 import { Today } from './screens/Today'
 import { Week } from './screens/Week'
-import { Foods } from './screens/Foods'
-import { More } from './screens/More'
+import { Settings } from './screens/Settings'
 import { AddFood } from './screens/AddFood'
+import { Train } from './screens/Train'
 import { Logo } from './ui/Logo'
 import { useTheme } from './ui/theme'
-import { IconFoods, IconMore, IconPlus, IconToday, IconWeek } from './ui/icons'
+import { IconPlus, IconSettings, IconToday, IconTrain, IconWeek } from './ui/icons'
+import { useSettings } from './ui/hooks'
 
-type Tab = 'today' | 'week' | 'foods' | 'more'
+type Tab = 'today' | 'week' | 'train' | 'settings'
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'today', label: 'Today', icon: <IconToday /> },
   { id: 'week', label: 'Week', icon: <IconWeek /> },
-  { id: 'foods', label: 'Foods', icon: <IconFoods /> },
-  { id: 'more', label: 'More', icon: <IconMore /> },
+  { id: 'train', label: 'Train', icon: <IconTrain /> },
+  { id: 'settings', label: 'Settings', icon: <IconSettings /> },
 ]
 
 function greeting(h = new Date().getHours()): string {
@@ -40,7 +41,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [date, setDate] = useState(today)
   const [adding, setAdding] = useState(false)
-  const [theme, toggleTheme] = useTheme()
+  const [theme, toggleTheme, themeMode, setThemeMode] = useTheme()
+  const settings = useSettings()
   const [seenToday, setSeenToday] = useState(today)
   if (seenToday !== today) {
     // Day rolled over while the app was open: jump to the new day.
@@ -49,8 +51,8 @@ export default function App() {
   }
 
   const openAdd = () => {
-    // Foods and More have no day on screen, so come back to Today after adding.
-    if (tab === 'foods' || tab === 'more') setTab('today')
+    // Settings and Train have no food day on screen, so come back to Today after adding.
+    if (tab === 'settings' || tab === 'train') setTab('today')
     setAdding(true)
   }
 
@@ -64,14 +66,16 @@ export default function App() {
         </button>
         <div className="greet">
           <span>{greeting()}</span>
-          <strong>Mahmoud</strong>
+          <strong>{settings.name || 'Mahmoud'}</strong>
         </div>
       </header>
       <main key={tab} className="screen">
         {tab === 'today' && <Today date={date} today={today} onDateChange={setDate} />}
         {tab === 'week' && <Week date={date} today={today} onDateChange={setDate} onOpenDay={(d) => { setDate(d); setTab('today') }} />}
-        {tab === 'foods' && <Foods />}
-        {tab === 'more' && <More today={today} />}
+        {tab === 'train' && <Train today={today} />}
+        {tab === 'settings' && (
+          <Settings today={today} themeMode={themeMode} onThemeMode={setThemeMode} onOpenFoods={() => setAdding(true)} />
+        )}
       </main>
       <nav className="tabs" aria-label="Sections">
         {TABS.map((t, i) => (

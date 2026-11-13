@@ -1,4 +1,4 @@
-import type { Macros, Unit } from '../db/types'
+import type { FoodCategory, Macros, Unit } from '../db/types'
 
 const n = (v: number) => (Math.round(v * 10) / 10).toLocaleString('en-US', { maximumFractionDigits: 1 })
 
@@ -14,3 +14,11 @@ export function fmtAmount(amount: number, unit: Unit): string {
 }
 
 export const unitLabel = (unit: Unit) => (unit === 'serving' ? 'servings' : unit === 'spray' ? 'sprays' : unit)
+
+export const CATEGORIES: { value: FoodCategory; label: string }[] = [
+  { value: 'branded', label: 'Branded' },
+  { value: 'home', label: 'Home' },
+  { value: 'combo', label: 'Meals' },
+  { value: 'restaurant', label: 'Restaurant' },
+  { value: 'custom', label: 'Custom' },
+]
