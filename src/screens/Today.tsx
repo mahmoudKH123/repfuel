@@ -7,14 +7,14 @@ import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType, type WeekSummary } from '../logic/budget'
 import { useSettings, useWeek } from '../ui/hooks'
 import { fmtAmount } from '../ui/format'
-import { MacroRings } from '../ui/Progress'
-import { WeekStrip } from '../ui/WeekStrip'
 import { useSwipe } from '../ui/motion'
+import { Budget } from '../ui/Budget'
 
 interface Props {
   date: string
   today: string
   onDateChange: (d: string) => void
+  onAdd: () => void
 }
 
 const r1 = (v: number) => Math.round(v * 10) / 10
@@ -22,7 +22,13 @@ const k = (v: number) => Math.round(v).toLocaleString('en-US')
 const HINT_KEY = 'rf-entry-hint-seen'
 const time = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 
-export function Today({ date, today, onDateChange }: Props) {
+const TIMES = [
+  { key: 'morning', label: 'Morning', until: 12 },
+  { key: 'afternoon', label: 'Afternoon', until: 17 },
+  { key: 'evening', label: 'Evening', until: 24 },
+] as const
+
+export function Today({ date, today, onDateChange, onAdd }: Props) {
   const settings = useSettings()
   const week = useWeek(date, today)
   const entries = useLiveQuery(() => db.entries.where('date').equals(date).sortBy('createdAt'), [date]) ?? []
@@ -47,59 +53,60 @@ export function Today({ date, today, onDateChange }: Props) {
   }
 
   const training = day.type === 'training'
-  const maxKcal = Math.max(0, ...entries.map((e) => e.kcal))
   const toggleType = () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings))
+  const groups = TIMES.map((t, i) => ({
+    ...t,
+    items: entries.filter((e) => { const h = new Date(e.createdAt).getHours(); return h < t.until && (i === 0 || h >= TIMES[i - 1].until) }),
+  })).filter((g) => g.items.length)
 
   return (
-    <section>
-      <WeekStrip days={week.days} date={date} today={today} onPick={onDateChange} onWeek={(n) => onDateChange(addDays(date, n))} />
+    <section className="td">
+      <header className="td-head">
+        <div className="td-date">
+          <h1>{date === today ? 'Today' : formatDay(date, { weekday: 'long' })}</h1>
+          <span>{formatDay(date, { weekday: date === today ? 'long' : undefined, day: 'numeric', month: 'long' })}</span>
+        </div>
+        {date !== today && <button className="td-back" onClick={() => onDateChange(today)}>Today</button>}
+        <button className={`td-type${training ? '' : ' rest'}`} onClick={toggleType} aria-label={`${training ? 'Training' : 'Rest'} day, tap to switch`}>
+          <i aria-hidden="true" />{training ? 'Training' : 'Rest'}
+        </button>
+      </header>
 
       <div key={date} className={`dayview ${shown.dir}`} {...swipe}>
-        <div className="daytitle">
-          <h1>{date === today ? 'Today' : formatDay(date, { weekday: 'long' })}</h1>
-          <span className="muted">{formatDay(date, { day: 'numeric', month: 'long' })}</span>
-        </div>
-        <div className="pillrow">
-          <button className={`pill ${training ? 'pill-train' : 'pill-rest'}`} onClick={toggleType} aria-label={`${training ? 'Training' : 'Rest'} day, tap to switch`}>
-            {training ? 'Training day' : 'Rest day'}
-          </button>
-          {date !== today && <button className="pill" onClick={() => onDateChange(today)}>Back to today</button>}
-        </div>
+        <Budget eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
+        <WeekLine week={week} date={date} today={today} onPick={onDateChange} />
 
-        <div className="card hero">
-          <MacroRings eaten={day.eaten} target={day.target} />
-        </div>
-        {day.fatOver > 0 && <p className="banner warn">Fat is {r1(day.fatOver)}g over today's target.</p>}
-
-        <WeekPulse week={week} date={date} today={today} onPick={onDateChange} />
-
-        <div className="section-head">
+        <div className="td-loghead">
           <h2>Logged</h2>
-          {entries.length > 0 && <span className="count">{k(day.eaten.kcal)} kcal</span>}
-          {entries.length > 0 && <button className="quiet" onClick={copyYesterday}>Same as yesterday</button>}
+          {entries.length > 0 && <button className="td-link" onClick={copyYesterday}>Same as yesterday</button>}
         </div>
-        {entries.length === 0 ? (
-          <div className="card empty">
-            <span className="empty-icon" aria-hidden="true">
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 1.5-3 4-3 7h3" />
-              </svg>
-            </span>
-            <strong>Nothing logged yet</strong>
-            <p className="muted">Tap + to add your first food.</p>
-            <button onClick={copyYesterday}>Copy {formatDay(yesterday)}</button>
-          </div>
-        ) : (
-          <>
-            <ul className="fuel">
-              {entries.map((e, i) => (
-                <EntryRow key={e.id} entry={e} index={i} scale={maxKcal ? e.kcal / maxKcal : 0} onUsed={hideHint} />
-              ))}
+
+        {groups.map((g) => (
+          <div key={g.key} className="td-group">
+            <h3>{g.label}<span>{k(g.items.reduce((t, e) => t + e.kcal, 0))} kcal</span></h3>
+            <ul className="td-list">
+              {g.items.map((e, i) => <EntryRow key={e.id} entry={e} index={i} onUsed={hideHint} />)}
             </ul>
-            {showHint && <p className="hint muted">Tap a food to edit, swipe left to delete.</p>}
-          </>
-        )}
-        {notice && <p className="muted" role="status">{notice}</p>}
+          </div>
+        ))}
+
+        <div className="td-group">
+          {entries.length === 0 && <h3>Nothing yet</h3>}
+          <div className="td-list td-actions">
+            <button className="td-addrow" onClick={onAdd}>
+              <span aria-hidden="true">+</span>Add food
+            </button>
+            {entries.length === 0 && (
+              <button className="td-addrow quiet" onClick={copyYesterday}>
+                <span aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5" /><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8" /></svg>
+                </span>Copy {formatDay(yesterday, { weekday: 'long' })}
+              </button>
+            )}
+          </div>
+        </div>
+        {showHint && entries.length > 0 && <p className="td-note">Tap a food to change it, swipe left to delete.</p>}
+        {notice && <p className="td-note" role="status">{notice}</p>}
       </div>
     </section>
   )
@@ -108,83 +115,52 @@ export function Today({ date, today, onDateChange }: Props) {
 /** A day "fits" when it lands within 10% of its own calorie target. */
 const FIT = 0.1
 
-function WeekPulse({ week, date, today, onPick }: { week: WeekSummary; date: string; today: string; onPick: (d: string) => void }) {
+/** Seven days as dots (also the day picker) and one sentence about the week. */
+function WeekLine({ week, date, today, onPick }: { week: WeekSummary; date: string; today: string; onPick: (d: string) => void }) {
   const done = week.days.filter((d) => d.date < today)
-  const sofar = week.days.filter((d) => d.date <= today)
   const banked = done.reduce((t, d) => t + d.target.kcal - d.eaten.kcal, 0)
   const weekOver = week.daysLeft === 0 ? week.left.kcal < 0 : banked < 0
   const amount = week.daysLeft === 0 ? Math.abs(week.left.kcal) : Math.abs(banked)
   const per = week.perDayLeft
-  const fitted = done.filter((d) => Math.abs(d.eaten.kcal / d.target.kcal - 1) <= FIT).length
-
-  const pct = (key: 'protein' | 'carbs' | 'fat') => {
-    const goal = sofar.reduce((t, d) => t + d.target[key], 0)
-    return goal ? Math.round((sofar.reduce((t, d) => t + d.eaten[key], 0) / goal) * 100) : 0
-  }
-  const macros = [
-    { key: 'protein', label: 'P', color: 'var(--protein)' },
-    { key: 'carbs', label: 'C', color: 'var(--carbs)' },
-    { key: 'fat', label: 'F', color: 'var(--fat)' },
-  ] as const
 
   return (
-    <div className="card pulse">
-      <div className="pulse-head">
-        <span className="eyebrow">This week</span>
-        {done.length > 0 && (
-          <span className={`pulse-tag${weekOver ? ' over' : ''}`}>{weekOver ? 'Over budget' : 'On track'}</span>
-        )}
-      </div>
-
-      <div className="pulse-chart" role="list">
-        <span className="pulse-target" aria-hidden="true" />
-        {week.days.map((d, i) => {
+    <div className="td-week">
+      <div className="td-dots" role="list" aria-label="This week">
+        {week.days.map((d) => {
           const ratio = d.target.kcal ? d.eaten.kcal / d.target.kcal : 0
-          const future = d.date > today
-          const state = future ? 'future' : d.date === today ? 'today'
-            : ratio > 1 + FIT ? 'over' : ratio < 1 - FIT ? 'under' : 'fit'
-          const h = future ? 1 : Math.min(ratio, 1.3)
+          const state = d.date > today ? 'future' : d.date === today ? 'now'
+            : d.eaten.kcal === 0 ? 'empty' : ratio > 1 + FIT ? 'over' : ratio < 1 - FIT ? 'under' : 'fit'
           return (
             <button
-              key={d.date} role="listitem" className={`pulse-col${d.date === date ? ' sel' : ''}`}
+              key={d.date} role="listitem" className={`td-dot ${state}${d.date === date ? ' sel' : ''}`}
               onClick={() => onPick(d.date)}
               aria-label={`${formatDay(d.date, { weekday: 'long' })}: ${k(d.eaten.kcal)} of ${k(d.target.kcal)} kcal`}
+              aria-current={d.date === date ? 'date' : undefined}
             >
-              <span className="pulse-slot">
-                <span className={`pulse-bar ${state}`} style={{ height: `${(h / 1.3) * 100}%`, animationDelay: `${0.1 + i * 0.06}s` }} />
-              </span>
-              <span className="pulse-day">{formatDay(d.date, { weekday: 'narrow' })}</span>
+              <span>{formatDay(d.date, { weekday: 'narrow' })}</span>
+              <i aria-hidden="true" />
             </button>
           )
         })}
       </div>
-
-      <p className="pulse-line">
+      <p className="td-weektext">
         {week.daysLeft === 0 ? (
-          <><strong className={weekOver ? 'over' : ''}>{k(amount)}</strong> kcal {weekOver ? 'over' : 'under'} for the week</>
+          <><b className={weekOver ? 'over' : ''}>{k(amount)} kcal {weekOver ? 'over' : 'under'}</b> for the week</>
         ) : done.length === 0 ? (
-          <><strong>{k(per?.kcal ?? 0)}</strong> kcal a day keeps you on budget</>
+          <><b>{k(per?.kcal ?? 0)} kcal a day</b> keeps the week on budget</>
+        ) : weekOver ? (
+          <><b className="over">{k(amount)} kcal over</b> so far{per && per.kcal > 0 ? ` · aim for ${k(per.kcal)} a day` : ''}</>
         ) : (
-          <><strong className={weekOver ? 'over' : ''}>{k(amount)}</strong> kcal {weekOver ? 'over' : 'banked'}
-            {per && per.kcal > 0 && <span className="muted"> · today up to {k(per.kcal)}</span>}</>
+          <><b>On track</b> · {k(amount)} kcal banked{per && per.kcal > 0 ? ` · up to ${k(per.kcal)} a day` : ''}</>
         )}
       </p>
-      <div className="pulse-foot">
-        {done.length > 0 && <span className="muted">{fitted} of {done.length} day{done.length === 1 ? '' : 's'} on target</span>}
-        <span className="pulse-macros">
-          {macros.map((m) => {
-            const v = pct(m.key)
-            return <span key={m.key} className={m.key === 'fat' && v > 100 ? 'over' : ''}><b style={{ color: m.color }}>{m.label}</b> {v}%</span>
-          })}
-        </span>
-      </div>
     </div>
   )
 }
 
 const OPEN = -88
 
-function EntryRow({ entry: e, index, scale, onUsed }: { entry: Entry; index: number; scale: number; onUsed: () => void }) {
+function EntryRow({ entry: e, index, onUsed }: { entry: Entry; index: number; onUsed: () => void }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [amount, setAmount] = useState(String(e.amount))
@@ -230,13 +206,8 @@ function EntryRow({ entry: e, index, scale, onUsed }: { entry: Entry; index: num
   const x = drag ?? (open ? OPEN : 0)
   const kp = e.protein * 4, kc = e.carbs * 4, kf = e.fat * 9
   const tot = kp + kc + kf || 1
-  const pa = (kp / tot) * 100, pc = (kc / tot) * 100
-  // Soft blend: each macro's colour sits at the middle of its share of the bar.
-  const fill = {
-    '--s1': `${pa / 2}%`, '--s2': `${pa + pc / 2}%`, '--s3': `${pa + pc + (100 - pa - pc) / 2}%`,
-    width: `${Math.max(0.22, Math.min(1, scale)) * 100}%`,
-    animationDelay: `${0.1 + index * 0.07}s`,
-  } as CSSProperties
+  // Small P/C/F pill on the left: where this food's calories come from.
+  const mark = { background: `linear-gradient(180deg, var(--protein) 0 ${(kp / tot) * 100}%, var(--carbs) 0 ${((kp + kc) / tot) * 100}%, var(--fat) 0)` } as CSSProperties
 
   const save = async () => {
     const v = Number(amount)
@@ -245,28 +216,28 @@ function EntryRow({ entry: e, index, scale, onUsed }: { entry: Entry; index: num
   }
 
   return (
-    <li className="fuel-row" style={{ animationDelay: `${0.05 + index * 0.07}s` }}>
+    <li className="td-row" style={{ animationDelay: `${0.05 + index * 0.05}s` }}>
       <div className="entry-swipe">
         <button className="entry-del" style={{ visibility: x < 0 ? 'visible' : 'hidden' }} onClick={() => deleteEntry(e.id!)} aria-label={`Delete ${e.name}`} tabIndex={open ? 0 : -1}>Delete</button>
         <div
-          className={`fuel-face${drag !== null ? ' dragging' : ''}`}
+          className={`td-face${drag !== null ? ' dragging' : ''}`}
           style={{ transform: `translateX(${x}px)` }}
           onTouchStart={onStart} onTouchMove={onMove} onTouchEnd={onEnd}
           onClick={onClick}
           role="button" tabIndex={0} aria-expanded={editing} aria-label={`${e.name}, ${k(e.kcal)} kcal. Tap to edit`}
           onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setEditing((v) => !v) } }}
         >
-          <span className="fuel-fill" style={fill} aria-hidden="true" />
-          <div className="fuel-text">
+          <span className="td-mark" style={mark} aria-hidden="true" />
+          <div className="td-text">
             <strong>{e.name}{e.estimate && <span className="tag">est.</span>}</strong>
-            <span className="fuel-sub">{fmtAmount(e.amount, e.unit)} · {time(e.createdAt)}</span>
+            <span>{fmtAmount(e.amount, e.unit)} · {time(e.createdAt)}</span>
           </div>
-          <span className="fuel-kcal">{k(e.kcal)}<small> kcal</small></span>
+          <span className="td-kcal">{k(e.kcal)}</span>
         </div>
       </div>
       {editing && (
-        <div className="fuel-detail">
-          <div className="fuel-macros">
+        <div className="td-detail">
+          <div className="td-detail-macros">
             <span><i style={{ background: 'var(--protein)' }} />{r1(e.protein)}g protein</span>
             <span><i style={{ background: 'var(--carbs)' }} />{r1(e.carbs)}g carbs</span>
             <span><i style={{ background: 'var(--fat)' }} />{r1(e.fat)}g fat</span>

@@ -64,11 +64,13 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
   }
 
   return (
-    <section className="st">
-      <div className="st-head">
-        <h1>Settings</h1>
-        <span className="muted">Everything in one place</span>
-      </div>
+    <section className="td st">
+      <header className="td-head">
+        <div className="td-date">
+          <h1>Settings</h1>
+          <span>Everything in one place</span>
+        </div>
+      </header>
 
       <ProfileCard
         name={settings.name || 'Mahmoud'}
@@ -77,31 +79,38 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
         trainDays={trainDays.map((x) => ({ done: doneIdx.has(x.i), today: x.i === ti, past: x.i < ti && x.i >= startIdx }))}
       />
 
-      <div className="st-grid">
-        <Tile id="targets" tone="kcal" wide={false} delay={0} onOpen={openPanel('targets')}
+      <h3 className="st-group-h">Plan</h3>
+      <div className="td-list st-rows">
+        <Row tone="kcal" delay={0} onOpen={openPanel('targets')}
           icon={<path d="M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 11a1 1 0 1 0 1 1" />}
-          title="Targets" value={k(settings.targets.training.kcal)} unit="kcal"
-          sub={`Rest ${k(settings.targets.rest.kcal)} · P ${settings.targets.training.protein}g`} />
-        <Tile id="training" tone="carbs" delay={1} onOpen={openPanel('training')}
+          title="Targets" sub={`Training ${k(settings.targets.training.kcal)} · Rest ${k(settings.targets.rest.kcal)} kcal`} />
+        <Row tone="carbs" delay={1} onOpen={openPanel('training')}
           icon={<path d="M6.5 7v10M17.5 7v10M3.5 9.5v5M20.5 9.5v5M6.5 12h11" />}
-          title="Training" value={`${doneIdx.size}/${trainDays.length}`} unit="this week"
-          sub={`Today · ${todayName ?? '—'}`} />
-        <Tile id="weight" tone="protein" delay={2} onOpen={openPanel('weight')}
+          title="Training" sub={`Today · ${todayName ?? 'Rest'}`} value={`${doneIdx.size}/${trainDays.length}`} />
+        <Row tone="protein" delay={2} onOpen={openPanel('weight')}
           icon={<><rect x="3.5" y="4" width="17" height="16" rx="4" /><path d="M8.5 9.5a5 5 0 0 1 7 0L12 13" /></>}
-          title="Weight" value={latest ? fmtWeight(latest.kg) : '–'} unit={latest ? 'kg' : undefined}
-          sub={delta === null ? (latest ? formatDay(latest.date, { day: 'numeric', month: 'short' }) : 'Log your first weigh-in') : `${delta > 0 ? '+' : ''}${delta} kg this week`} />
-        <Tile id="foods" tone="fat" delay={3} onOpen={onOpenFoods}
+          title="Weight" value={latest ? `${fmtWeight(latest.kg)} kg` : undefined}
+          sub={delta === null ? (latest ? `Last ${formatDay(latest.date, { day: 'numeric', month: 'short' })}` : 'Log your first weigh-in') : `${delta > 0 ? '+' : ''}${delta} kg this week`} />
+      </div>
+
+      <h3 className="st-group-h">Food</h3>
+      <div className="td-list st-rows">
+        <Row tone="fat" delay={3} onOpen={onOpenFoods}
           icon={<path d="M7 3v8a2 2 0 0 0 4 0V3M9 11v10M16 3c-1.7 0-3 2-3 5s1.3 4 3 4v9" />}
-          title="My foods" value={String(foodCount)} unit="saved" sub="Open, edit or add" chevron />
-        <Tile id="ai" tone="ai" small delay={4} onOpen={openPanel('ai')}
+          title="My foods" sub="Open, edit or add" value={String(foodCount)} />
+        <Row tone="ai" delay={4} onOpen={openPanel('ai')}
           icon={<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z" />}
-          title="AI" sub={pass ? 'Connected' : 'Set passcode'} />
-        <Tile id="look" tone="look" small delay={5} onOpen={openPanel('look')}
+          title="AI" sub="Estimates and label scans" value={pass ? 'Connected' : 'Set passcode'} />
+      </div>
+
+      <h3 className="st-group-h">App</h3>
+      <div className="td-list st-rows">
+        <Row tone="look" delay={5} onOpen={openPanel('look')}
           icon={<><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5v17A8.5 8.5 0 0 0 12 3.5z" fill="currentColor" /></>}
-          title="Look" sub={themeMode === 'auto' ? 'Auto' : themeMode === 'dark' ? 'Dark' : 'Light'} />
-        <Tile id="backup" tone="teal" small delay={6} onOpen={openPanel('backup')}
+          title="Look" sub="Theme and greeting name" value={themeMode === 'auto' ? 'Auto' : themeMode === 'dark' ? 'Dark' : 'Light'} />
+        <Row tone="teal" delay={6} onOpen={openPanel('backup')}
           icon={<path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 8.5a4 4 0 0 1-.5 9.5M12 12v8M9 17l3 3 3-3" />}
-          title="Backup" sub="Export" />
+          title="Backup" sub="Export or restore your data" />
       </div>
       <p className="st-foot">RepFuel · your data stays on this phone</p>
 
@@ -181,29 +190,30 @@ function Spark({ values }: { values: number[] }) {
   )
 }
 
-/* ---------- Tile ---------- */
+/* ---------- Row: iOS-style setting row, opens its panel ---------- */
 
-function Tile({ id, tone, icon, title, value, unit, sub, small, wide, chevron, delay, onOpen }: {
-  id: string; tone: string; icon: ReactNode; title: string; value?: string; unit?: string; sub: string
-  small?: boolean; wide?: boolean; chevron?: boolean; delay: number; onOpen: (e: { currentTarget: HTMLElement }) => void
+function Row({ tone, icon, title, sub, value, delay, onOpen }: {
+  tone: string; icon: ReactNode; title: string; sub: string; value?: string
+  delay: number; onOpen: (e: { currentTarget: HTMLElement }) => void
 }) {
   return (
     <button
-      className={`st-tile t-${tone}${small ? ' small' : ''}${wide ? ' wide' : ''}`}
-      style={{ animationDelay: `${120 + delay * 55}ms` }}
-      onClick={onOpen} aria-label={`${title}: ${value ?? ''} ${unit ?? ''} ${sub}`} data-tile={id}
+      className={`st-row-btn t-${tone}`}
+      style={{ animationDelay: `${80 + delay * 40}ms` }}
+      onClick={onOpen} aria-label={`${title}: ${value ?? ''} ${sub}`}
     >
       <span className="st-ico">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{icon}</svg>
       </span>
-      <span className="st-tile-title">{title}{chevron && <em aria-hidden>↗</em>}</span>
-      {value !== undefined && <span className="st-tile-val"><b>{value}</b>{unit && <small>{unit}</small>}</span>}
-      <span className="st-tile-sub">{sub}</span>
+      <span className="st-row-text">
+        <strong>{title}</strong>
+        <small>{sub}</small>
+      </span>
+      {value && <span className="st-row-val">{value}</span>}
+      <svg className="st-row-chev" width="8" height="13" viewBox="0 0 8 13" aria-hidden><path d="M1.5 1.5l5 5-5 5" /></svg>
     </button>
   )
 }
-
-/* ---------- Panel: grows out of the tile, swipe down to close ---------- */
 
 function Panel({ origin, tone, title, onClose, children }: { origin: Origin; tone: string; title: string; onClose: () => void; children: ReactNode }) {
   const [closing, setClosing] = useState(false)

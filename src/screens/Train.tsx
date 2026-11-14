@@ -7,7 +7,7 @@ import { addExerciseToDay, ensureWeek, removeExerciseFromDay, saveExercise, save
 import { addDays, formatDay } from '../logic/dates'
 import { applyWeights, cancelAttempt, fmtWeight, recordAttempt, startAttempt, volumeKg } from '../logic/train'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, findFrom, missedDays, mondayOf, reshuffle, type Reshuffle } from '../logic/schedule'
-import { useCountUp } from '../ui/motion'
+import { useCountUp, useFill } from '../ui/motion'
 import { WeightDial, type DialMode } from '../ui/WeightDial'
 
 const fmt = (v: number) => Math.round(v).toLocaleString('en-US')
@@ -113,18 +113,18 @@ export function Train({ today }: { today: string }) {
   }
 
   return (
-    <section className="tr">
-      <div className="tr-top">
-        <div>
+    <section className="td tr">
+      <header className="td-head">
+        <div className="td-date">
           <h1>Train</h1>
-          <span className="muted">{formatDay(today, { weekday: 'long', day: 'numeric', month: 'short' })}</span>
+          <span>{formatDay(today, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
         </div>
         {day && (
-          <button className={`quiet tr-edit${editing ? ' on' : ''}`} onClick={() => setEditing((v) => !v)}>
+          <button className={`td-back tr-edit${editing ? ' on' : ''}`} onClick={() => setEditing((v) => !v)}>
             {editing ? 'Done' : 'Edit'}
           </button>
         )}
-      </div>
+      </header>
 
       <WeekStrip
         wp={wp} ti={ti} trained={trained} todayId={dayId} shuffleKey={shuffleKey} days={days}
@@ -288,42 +288,31 @@ function OverflowSheet({ names, onSkip, onSelf }: { names: string[]; onSkip: () 
   )
 }
 
-/* ---------- Hero: progress ring + day summary ---------- */
-
-const RS = 112
-const RW = 11
+/* ---------- Summary: straight on the page, like Today ---------- */
 
 function Hero({ day, list, done, finished, nextName }: { day: PlanDay; list: Exercise[]; done: number; finished: boolean; nextName?: string }) {
   const total = list.length
-  const ratio = total ? done / total : 0
-  const v = useCountUp(ratio, 800, 120)
-  const r = (RS - RW) / 2
-  const c = 2 * Math.PI * r
+  const fill = useFill(total ? done / total : 0)
+  const shown = useCountUp(finished ? volumeKg(list) : done, finished ? 1000 : 500)
   const sets = list.reduce((t, e) => t + e.sets, 0)
   return (
-    <div className={`card hero tr-hero${finished ? ' finished' : ''}`}>
-      <div className="tr-ring" style={{ width: RS, height: RS }}>
-        <svg width={RS} height={RS} viewBox={`0 0 ${RS} ${RS}`}>
-          <circle cx={RS / 2} cy={RS / 2} r={r} className="kring-track" strokeWidth={RW} />
-          {v > 0.003 && <circle cx={RS / 2} cy={RS / 2} r={r} strokeWidth={RW} className="tr-ring-arc" strokeDasharray={`${v * c} ${c}`} />}
-        </svg>
-        <div className="tr-ring-center">
-          {finished ? (
-            <svg className="tr-ring-check" width="40" height="40" viewBox="0 0 24 24" aria-label="Done"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-          ) : (
-            <>
-              <strong>{done}<small>/{total}</small></strong>
-              <span>done</span>
-            </>
-          )}
-        </div>
+    <div className={`tr-sum${finished ? ' finished' : ''}`}>
+      <span className="tr-day">{finished && <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}{day.name}</span>
+      {finished ? (
+        <>
+          <p className="td-big">{fmt(shown)}</p>
+          <p className="td-cap">kg lifted <span>· workout complete</span></p>
+        </>
+      ) : (
+        <>
+          <p className="td-big">{Math.round(shown)}<span className="tr-of">/{total}</span></p>
+          <p className="td-cap">exercises done <span>· {sets} sets</span></p>
+        </>
+      )}
+      <div className="td-bar tr-bar" role="progressbar" aria-label="Exercises done" aria-valuenow={done} aria-valuemax={total}>
+        <span style={{ width: `${fill * 100}%` }} />
       </div>
-      <div className="tr-hero-text">
-        <span className="eyebrow">{finished ? 'Completed' : 'Today'}</span>
-        <h2>{day.name}</h2>
-        <p>{total} exercises · {sets} sets</p>
-        {finished ? <p className="tr-vol"><b>{fmt(volumeKg(list))}</b> kg lifted</p> : nextName && <p className="tr-next">Up next: {nextName}</p>}
-      </div>
+      {nextName && <p className="tr-upnext">Up next · {nextName}</p>}
     </div>
   )
 }
@@ -332,16 +321,19 @@ function Hero({ day, list, done, finished, nextName }: { day: PlanDay; list: Exe
 
 function RestCard({ nextName, onTrain }: { nextName?: string; onTrain?: () => void }) {
   return (
-    <div className="card tr-rest">
-      <div className="tr-rest-icon">
-        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
-        </svg>
-      </div>
-      <h2>Rest day</h2>
-      <p className="muted">Muscles grow on the days off.</p>
-      {nextName && <p className="tr-next">Next workout: <strong>{nextName}</strong></p>}
-      {onTrain && <button className="small" onClick={onTrain}>Train today instead</button>}
+    <div className="tr-sum tr-restday">
+      <span className="tr-day rest">
+        <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
+        Rest day
+      </span>
+      <p className="tr-rest-title">Recover today.</p>
+      <p className="td-cap"><span>Muscles grow on the days off.</span></p>
+      {nextName && <p className="tr-upnext">Next workout · {nextName}</p>}
+      {onTrain && (
+        <div className="td-list td-actions tr-rest-actions">
+          <button className="td-addrow" onClick={onTrain}><span aria-hidden="true">+</span>Train today instead</button>
+        </div>
+      )}
     </div>
   )
 }

@@ -5,7 +5,7 @@ import { Week } from './screens/Week'
 import { Settings } from './screens/Settings'
 import { AddFood } from './screens/AddFood'
 import { Train } from './screens/Train'
-import { Logo } from './ui/Logo'
+import { Greeting } from './ui/Greeting'
 import { useTheme } from './ui/theme'
 import { IconPlus, IconSettings, IconToday, IconTrain, IconWeek } from './ui/icons'
 import { useSettings } from './ui/hooks'
@@ -17,12 +17,6 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'train', label: 'Train', icon: <IconTrain /> },
   { id: 'settings', label: 'Settings', icon: <IconSettings /> },
 ]
-
-function greeting(h = new Date().getHours()): string {
-  if (h < 12) return 'Good morning'
-  if (h >= 12 && h < 17) return 'Good afternoon'
-  return 'Good evening'
-}
 
 /** Keeps "today" correct if the app stays open past midnight or is resumed the next day. */
 function useToday(): string {
@@ -59,28 +53,23 @@ export default function App() {
   // Each tab has its own colour world (see index.css); on <html> so sheets and panels follow too.
   useEffect(() => { document.documentElement.dataset.world = adding ? 'add' : tab }, [adding, tab])
 
-  if (adding) return <><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} /></div></>
+  if (adding) return <><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} /></div><div className="aurora aurora-cover" aria-hidden="true" /></>
 
   return (
     <div className="app">
       <div className="aurora" aria-hidden="true" />
       <header className="appbar">
-        <button className="logo-btn" onClick={toggleTheme} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
-          <Logo size={38} />
-        </button>
-        <div className="greet">
-          <span>{greeting()}</span>
-          <strong>{settings.name || 'Mahmoud'}</strong>
-        </div>
+        <Greeting today={today} name={settings.name || 'Mahmoud'} onLogo={toggleTheme} logoLabel={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} />
       </header>
       <main key={tab} className="screen">
-        {tab === 'today' && <Today date={date} today={today} onDateChange={setDate} />}
+        {tab === 'today' && <Today date={date} today={today} onDateChange={setDate} onAdd={openAdd} />}
         {tab === 'week' && <Week date={date} today={today} onDateChange={setDate} onOpenDay={(d) => { setDate(d); setTab('today') }} />}
         {tab === 'train' && <Train today={today} />}
         {tab === 'settings' && (
           <Settings today={today} themeMode={themeMode} onThemeMode={setThemeMode} onOpenFoods={() => setAdding(true)} />
         )}
       </main>
+      <div className="aurora aurora-cover" aria-hidden="true" />
       <nav className="tabs" aria-label="Sections">
         {TABS.map((t, i) => (
           <Fragment key={t.id}>

@@ -410,7 +410,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
         {draft.note && <p className="muted add-note">{draft.note}</p>}
       </div>
 
-      <div className="card add-macros">
+      <div className="add-macros">
         {MAC.map((m, i) => (
           <MacroLine key={m.key} index={i} label={m.label} color={m.color} grams={portion[m.key]} total={portion.protein + portion.carbs + portion.fat} />
         ))}
@@ -558,7 +558,7 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone }: { nam
         <p className="add-per"><span className="tag">{on.length} of {items.length} items</span><span className="tag">logs as one meal</span></p>
       </div>
 
-      <div className="card add-macros">
+      <div className="add-macros">
         {MAC.map((m, i) => (
           <MacroLine key={m.key} index={i} label={m.label} color={m.color} grams={totals[m.key]} total={totals.protein + totals.carbs + totals.fat} />
         ))}

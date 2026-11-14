@@ -3,8 +3,8 @@ import { setDayType } from '../db/repo'
 import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType, type DaySummary } from '../logic/budget'
 import { useSettings, useWeek } from '../ui/hooks'
-import { MacroRings } from '../ui/Progress'
-import { useCountUp, useSwipe } from '../ui/motion'
+import { Budget } from '../ui/Budget'
+import { useFill, useSwipe } from '../ui/motion'
 
 interface Props {
   date: string
@@ -24,99 +24,102 @@ export function Week({ date, today, onDateChange, onOpenDay }: Props) {
   const last = week.days[6].date
   const isThisWeek = week.days.some((d) => d.date === today)
   const per = week.perDayLeft
+  const training = week.days.filter((d) => d.type === 'training').length
 
   return (
-    <section>
-      <div className="daynav">
-        <button className="icon-btn" onClick={() => onDateChange(addDays(first, -7))} aria-label="Previous week">‹</button>
-        <div className="daynav-title">
+    <section className="td">
+      <header className="td-head">
+        <div className="td-date">
           <h1>{isThisWeek ? 'This week' : 'Week'}</h1>
-          <span className="muted">{formatDay(first, { day: 'numeric', month: 'short' })} – {formatDay(last, { day: 'numeric', month: 'short' })}</span>
+          <span>{formatDay(first, { day: 'numeric', month: 'short' })} – {formatDay(last, { day: 'numeric', month: 'short' })} · {training} training, {7 - training} rest</span>
         </div>
-        <button className="icon-btn" onClick={() => onDateChange(addDays(first, 7))} aria-label="Next week">›</button>
-      </div>
+        {!isThisWeek && <button className="td-back" onClick={() => onDateChange(today)}>This week</button>}
+        <div className="wk-nav">
+          <button onClick={() => onDateChange(addDays(first, -7))} aria-label="Previous week">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+          </button>
+          <button onClick={() => onDateChange(addDays(first, 7))} aria-label="Next week">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+          </button>
+        </div>
+      </header>
 
       <div key={first} className="wk-body" {...swipe}>
-        <div className="card hero">
-          <MacroRings eaten={week.eaten} target={week.pool} />
-        </div>
+        <Budget eaten={week.eaten} target={week.pool} fatOver={week.fatOver} scope="this week" />
         {per && per.kcal > 0 && week.daysLeft > 0 && (
-          <p className="wk-note">
-            <strong>{k(per.kcal)}</strong> kcal a day for the {week.daysLeft === 1 ? 'last day' : `last ${week.daysLeft} days`}
+          <p className="td-weektext wk-per">
+            <b>{k(per.kcal)} kcal a day</b> {week.daysLeft === 1 ? 'for the last day' : `for the ${week.daysLeft} days left`}
           </p>
         )}
-        {week.fatOver > 0 && <p className="banner warn">Fat is {Math.round(week.fatOver * 10) / 10}g over for the week.</p>}
 
-        <ul className="wk-days">
+        <div className="td-loghead"><h2>Days</h2></div>
+        <ul className="td-list wk-list">
           {week.days.map((d, i) => (
-            <DayCard
+            <DayRow
               key={d.date} day={d} index={i} today={today}
               onOpen={() => onOpenDay(d.date)}
               onToggle={() => setDayType(d.date, d.type === 'training' ? 'rest' : 'training', defaultDayType(d.date, settings))}
             />
           ))}
         </ul>
+        <p className="td-note">Tap a day to open it. Tap Training or Rest to switch.</p>
       </div>
     </section>
   )
 }
 
-function DayCard({ day: d, index, today, onOpen, onToggle }: { day: DaySummary; index: number; today: string; onOpen: () => void; onToggle: () => void }) {
+function DayRow({ day: d, index, today, onOpen, onToggle }: { day: DaySummary; index: number; today: string; onOpen: () => void; onToggle: () => void }) {
   const ratio = d.target.kcal ? d.eaten.kcal / d.target.kcal : 0
   const over = ratio > 1.1
   const future = d.date > today
   const isToday = d.date === today
-  const v = useCountUp(Math.min(1, ratio), 900, 200 + index * 60)
-
-  // Ribbon: length = kcal vs target, colour = that day's protein/carbs/fat mix.
-  const kp = d.eaten.protein * 4, kc = d.eaten.carbs * 4, kf = d.eaten.fat * 9
-  const tot = kp + kc + kf || 1
-  const pa = (kp / tot) * 100, pc = (kc / tot) * 100
-  const ribbon = {
-    '--s1': `${pa / 2}%`, '--s2': `${pa + pc / 2}%`, '--s3': `${pa + pc + (100 - pa - pc) / 2}%`,
-    width: `${Math.min(1, ratio) * 100}%`,
-    animationDelay: `${0.15 + index * 0.06}s`,
-  } as CSSProperties
-
-  const r = 17, c = 2 * Math.PI * r
+  const fill = useFill(Math.min(1, ratio))
   const training = d.type === 'training'
+  // Bar colour = where that day's calories came from (P / C / F).
+  const kp = d.eaten.protein * 4, kc = d.eaten.carbs * 4, kf = d.eaten.fat * 9
+  const tot = kp + kc + kf
+  const bar: CSSProperties = {
+    width: `${fill * 100}%`,
+    transitionDelay: `${0.1 + index * 0.05}s`,
+    ...(tot ? { background: `linear-gradient(90deg, var(--protein) 0 ${(kp / tot) * 100}%, var(--carbs) 0 ${((kp + kc) / tot) * 100}%, var(--fat) 0)` } : {}),
+  }
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }
 
   return (
     <li
-      className={`card wk-day${isToday ? ' is-today' : ''}${future ? ' is-future' : ''}${d.eaten.kcal > 0 ? ' has-food' : ''}`}
-      style={{ animationDelay: `${0.05 + index * 0.05}s` }}
+      className={`wk-row${isToday ? ' now' : ''}${future ? ' future' : ''}`}
+      style={{ animationDelay: `${0.04 + index * 0.04}s` }}
       onClick={onOpen} onKeyDown={onKey} role="button" tabIndex={0}
       aria-label={`${formatDay(d.date, { weekday: 'long', day: 'numeric', month: 'long' })}: ${k(d.eaten.kcal)} of ${k(d.target.kcal)} kcal. Open day`}
     >
-      <svg className="wk-ring" width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">
-        <circle cx="22" cy="22" r={r} className="wk-ring-track" />
-        {v > 0.004 && <circle cx="22" cy="22" r={r} className={`wk-ring-arc${over ? ' over' : ''}`} strokeDasharray={`${v * c} ${c}`} />}
-      </svg>
-      <span className="wk-ring-num" aria-hidden="true">{formatDay(d.date, { day: 'numeric' })}</span>
-
-      <div className="wk-head">
-        <strong>{isToday ? 'Today' : formatDay(d.date, { weekday: 'long' })}</strong>
-        <button
-          className={`wk-chip ${training ? 'pill-train' : 'pill-rest'}`}
-          onClick={(e) => { e.stopPropagation(); onToggle() }}
-          aria-label={`${training ? 'Training' : 'Rest'} day, tap to switch`}
-        >
-          {training ? 'Training' : 'Rest'}
-        </button>
-      </div>
-      <span className={`wk-kcal${over ? ' over' : ''}`}>{k(d.eaten.kcal)}<small> / {k(d.target.kcal)}</small></span>
-
-      <span className="wk-ribbon" aria-hidden="true">
-        {d.eaten.kcal > 0 && <span className="wk-ribbon-fill" style={ribbon} />}
+      <span className="wk-date" aria-hidden="true">
+        <b>{formatDay(d.date, { day: 'numeric' })}</b>
+        <small>{formatDay(d.date, { weekday: 'short' })}</small>
       </span>
-      {d.eaten.kcal > 0 && (
-        <span className="wk-macros" aria-hidden="true">
-          <span><i style={{ background: 'var(--protein)' }} />{k(d.eaten.protein)}g</span>
-          <span><i style={{ background: 'var(--carbs)' }} />{k(d.eaten.carbs)}g</span>
-          <span><i style={{ background: 'var(--fat)' }} />{k(d.eaten.fat)}g</span>
+      <span className="wk-mid">
+        <span className="wk-top">
+          <strong>{isToday ? 'Today' : formatDay(d.date, { weekday: 'long' })}</strong>
+          <button
+            className={`wk-type${training ? '' : ' rest'}`}
+            onClick={(e) => { e.stopPropagation(); onToggle() }}
+            aria-label={`${training ? 'Training' : 'Rest'} day, tap to switch`}
+          >
+            <i aria-hidden="true" />{training ? 'Training' : 'Rest'}
+          </button>
         </span>
-      )}
+        <span className="wk-bar" aria-hidden="true"><span style={bar} /></span>
+        {d.eaten.kcal > 0 && (
+          <span className="wk-macros" aria-hidden="true">
+            <span><i style={{ background: 'var(--protein)' }} />{k(d.eaten.protein)}g</span>
+            <span><i style={{ background: 'var(--carbs)' }} />{k(d.eaten.carbs)}g</span>
+            <span><i style={{ background: 'var(--fat)' }} />{k(d.eaten.fat)}g</span>
+          </span>
+        )}
+      </span>
+      <span className={`wk-kcal${over ? ' over' : ''}`}>
+        {k(d.eaten.kcal)}
+        <small>of {k(d.target.kcal)}</small>
+      </span>
     </li>
   )
 }
