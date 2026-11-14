@@ -2,8 +2,8 @@ import { db } from './db'
 import { DEFAULT_SETTINGS } from './defaults'
 import type { DayType, Entry, Exercise, Food, Settings, WeekPlan } from './types'
 import { defaultDayType } from '../logic/budget'
-import { addDays } from '../logic/dates'
-import { dayIndex, mondayOf, newWeek, restWeekdays } from '../logic/schedule'
+import { addDays, weekStart } from '../logic/dates'
+import { DEFAULT_WEEK, dayIndex, mondayOf, newWeek, restWeekdays } from '../logic/schedule'
 import { scaleFood } from '../logic/macros'
 
 /** All reads and writes the screens need. Screens never touch Dexie tables directly. */
@@ -14,6 +14,37 @@ export async function getSettings(): Promise<Settings> {
 
 export async function saveSettings(value: Settings): Promise<void> {
   await db.settings.put({ key: 'settings', value })
+}
+
+/**
+ * Changes which weekdays are food rest days. Any past day that would flip (no override of its own) keeps its old type,
+ * so targets you already logged against never change. This week's plan is re-applied so today and later follow it.
+ */
+export async function setRestDays(rest: number[], today: string): Promise<Settings> {
+  const s = await getSettings()
+  const old = s.defaultRestDays
+  if (old.length === rest.length && old.every((d) => rest.includes(d))) return s
+  const next = { ...s, defaultRestDays: rest }
+  const first = await db.entries.orderBy('date').first()
+  await db.transaction('rw', db.days, db.settings, async () => {
+    if (first) {
+      const pinned = new Set((await db.days.toArray()).map((d) => d.date))
+      for (let d = weekStart(first.date); d < today; d = addDays(d, 1)) {
+        const was = defaultDayType(d, s)
+        if (!pinned.has(d) && was !== defaultDayType(d, next)) await db.days.put({ date: d, type: was })
+      }
+    }
+    await db.settings.put({ key: 'settings', value: next })
+  })
+  const plan = await db.weeks.get(mondayOf(today))
+  if (plan) await saveWeek(plan, today)
+  return next
+}
+
+/** Startup: food rest days always follow the training plan's normal week (also fixes installs from before the plan existed). */
+export async function syncRestDays(today: string): Promise<void> {
+  const s = await getSettings()
+  await setRestDays(restWeekdays(s.trainingWeek ?? DEFAULT_WEEK), today)
 }
 
 export async function logFood(date: string, food: Food, amount: number): Promise<number> {
@@ -44,6 +75,16 @@ export async function updateEntryAmount(id: number, amount: number): Promise<voi
 
 export async function deleteEntry(id: number): Promise<void> {
   await db.entries.delete(id)
+}
+
+/** Puts a deleted item back exactly as it was (same id, time and numbers). Used by Undo. */
+export async function restoreEntry(e: Entry): Promise<void> {
+  await db.entries.put(e)
+}
+
+/** Moves a logged item to another part of the day by changing its time (the day itself stays). */
+export async function updateEntryTime(id: number, createdAt: number): Promise<void> {
+  await db.entries.update(id, { createdAt })
 }
 
 /** Copies every item logged on `from` into `to`. Returns how many were copied. */
@@ -146,8 +187,8 @@ export async function removeExerciseFromDay(dayId: string, exerciseId: string): 
  * With `thisWeek`, today and the rest of this week switch to it too (days already trained stay).
  */
 export async function saveTrainingWeek(days: string[], thisWeek: boolean, today: string): Promise<void> {
-  const settings = await getSettings()
-  await saveSettings({ ...settings, trainingWeek: days, defaultRestDays: restWeekdays(days) })
+  const settings = await setRestDays(restWeekdays(days), today)
+  await saveSettings({ ...settings, trainingWeek: days })
   if (!thisWeek) return
   const week = mondayOf(today)
   const plan = await ensureWeek(week, today)

@@ -5,7 +5,7 @@ import './index.css'
 import App from './App'
 import { mountIntro } from './ui/introGate'
 import { ensureSeeded } from './db/db'
-import { ensureWeek } from './db/repo'
+import { ensureWeek, syncRestDays } from './db/repo'
 import { todayKey } from './logic/dates'
 import { mondayOf } from './logic/schedule'
 
@@ -19,12 +19,25 @@ if (standalone) document.documentElement.dataset.standalone = ''
 // Cold start only: this file runs once per launch, so the intro plays after the app was fully closed, not when it comes back from the background.
 mountIntro()
 
+// Rows and buttons look pressed only for a real tap: once the finger moves (a scroll), the pressed look is dropped, like iOS lists.
+{
+  let x0 = 0, y0 = 0
+  const root = document.documentElement
+  addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; root.classList.remove('scrolling') }, { passive: true })
+  addEventListener('touchmove', (e) => {
+    const t = e.touches[0]
+    if (Math.abs(t.clientX - x0) > 6 || Math.abs(t.clientY - y0) > 6) root.classList.add('scrolling')
+  }, { passive: true })
+  addEventListener('touchend', () => root.classList.remove('scrolling'), { passive: true })
+}
+
 // Offline support: the service worker caches the app so it opens with no connection.
 registerSW({ immediate: true })
 
 const root = createRoot(document.getElementById('root')!)
 ensureSeeded()
-  // Create this week's training schedule early so Today's training/rest day follows it.
+  // Food rest days follow the training plan, then this week's schedule is created so Today's training/rest day follows it.
+  .then(() => syncRestDays(todayKey()))
   .then(() => ensureWeek(mondayOf(todayKey()), todayKey()))
   .catch((err) => console.error('Seeding failed', err))
   .finally(() => {

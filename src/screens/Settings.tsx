@@ -99,8 +99,8 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
           icon={<path d="M7 3v8a2 2 0 0 0 4 0V3M9 11v10M16 3c-1.7 0-3 2-3 5s1.3 4 3 4v9" />}
           title="My foods" sub="Open, edit or add" value={String(foodCount)} />
         <Row tone="ai" delay={4} onOpen={openPanel('ai')}
-          icon={<path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18 15l.8 2.2L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.8z" />}
-          title="AI" sub="Estimates and label scans" value={pass ? 'Connected' : 'Set passcode'} />
+          icon={<><path d="M3.5 13.5h17a8.5 6.5 0 0 1-17 0z" /><path d="M9.5 21h5" /><path d="M11 2.8c.35 1.9 1 2.55 2.9 2.9-1.9.35-2.55 1-2.9 2.9-.35-1.9-1-2.55-2.9-2.9 1.9-.35 2.55-1 2.9-2.9z" fill="currentColor" strokeWidth={1.2} /></>}
+          title="AI" sub="Meals and labels" value={pass ? 'Connected' : 'Set passcode'} />
       </div>
 
       <h3 className="st-group-h">App</h3>

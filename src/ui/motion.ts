@@ -3,9 +3,12 @@ import { afterIntro } from './introGate'
 
 const reduced = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
-/** Animates a number from its previous value to the new one (once per change). */
-export function useCountUp(value: number, ms = 700, delay = 0): number {
-  const [shown, setShown] = useState(reduced() ? value : 0)
+/** Last value shown per memo key, so a number or bar that remounts (e.g. switching day) carries on from where it was. */
+const last = new Map<string, number>()
+
+/** Animates a number from its previous value to the new one (once per change). With `memo`, a remount starts from the last value shown. */
+export function useCountUp(value: number, ms = 700, delay = 0, memo?: string): number {
+  const [shown, setShown] = useState(() => (reduced() ? value : memo !== undefined ? last.get(memo) ?? 0 : 0))
   const from = useRef(shown)
   useEffect(() => {
     let id = 0
@@ -18,23 +21,24 @@ export function useCountUp(value: number, ms = 700, delay = 0): number {
         const v = a + (value - a) * (1 - Math.pow(1 - k, 3))
         setShown(v)
         from.current = v
+        if (memo !== undefined) last.set(memo, v)
         if (k < 1) id = requestAnimationFrame(step)
       }
       id = requestAnimationFrame(step)
     })
     return () => { cancel(); cancelAnimationFrame(id) }
-  }, [value, ms, delay])
+  }, [value, ms, delay, memo])
   return shown
 }
 
-/** Starts at 0 and animates to `ratio` after mount, so bars and rings fill on open. */
-export function useFill(ratio: number): number {
-  const [r, setR] = useState(0)
+/** Starts at 0 (or, with `memo`, the last value shown) and animates to `ratio` after mount, so bars and rings fill on open. */
+export function useFill(ratio: number, memo?: string): number {
+  const [r, setR] = useState(() => (memo !== undefined ? last.get(memo) ?? 0 : 0))
   useEffect(() => {
     let id = 0
-    const cancel = afterIntro(() => { id = requestAnimationFrame(() => setR(ratio)) })
+    const cancel = afterIntro(() => { id = requestAnimationFrame(() => { setR(ratio); if (memo !== undefined) last.set(memo, ratio) }) })
     return () => { cancel(); cancelAnimationFrame(id) }
-  }, [ratio])
+  }, [ratio, memo])
   return r
 }
 

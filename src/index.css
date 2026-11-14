@@ -179,10 +179,16 @@ main { flex: 1; padding: 4px 16px calc(env(safe-area-inset-bottom) + 110px); max
 .tabs .tab-add { display: grid; place-items: center; padding: 0; }
 .tab-add span {
   width: 50px; height: 50px; border-radius: 50%; display: grid; place-items: center; color: #fff;
-  background: linear-gradient(135deg, var(--w1), var(--w2));
-  box-shadow: 0 4px 16px color-mix(in srgb, var(--w1) 45%, transparent);
-  animation: pop 0.35s var(--ease) both; transition: transform 0.15s var(--ease);
+  background: linear-gradient(135deg, var(--p1), var(--p2));
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--p1) 45%, transparent);
+  animation: addSwap 0.4s var(--ease) both; transition: transform 0.15s var(--ease);
 }
+/* The + button takes the new tab's colours at once (a fade between opposite colours goes muddy) with a small pop. */
+:root { --p1: #2fd36a; --p2: #14b8a6; }
+:root[data-world='week'] { --p1: #6366f1; --p2: #38bdf8; }
+:root[data-world='train'] { --p1: #f59e0b; --p2: #f97357; }
+:root[data-world='settings'] { --p1: #8b5cf6; --p2: #ec4899; }
+@keyframes addSwap { from { transform: scale(0.82); } }
 .tabs .tab-add:active { transform: none; }
 .tab-add:active span { transform: scale(0.9); }
 
@@ -320,16 +326,25 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 .td-warn { margin: 14px 0 0; font-size: 13px; font-weight: 600; color: var(--fat); }
 
 .td-week { margin-top: 28px; padding-top: 18px; border-top: 0.5px solid var(--line); }
-.td-dots { display: grid; grid-template-columns: repeat(7, 1fr); }
-.td-dot { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 4px 0; border: 0; background: none; color: var(--text2); font-size: 12px; font-weight: 600; }
-.td-dot i { width: 10px; height: 10px; border-radius: 50%; background: var(--track); transition: transform 0.2s var(--ease); }
+.td-dots { position: relative; display: grid; grid-template-columns: repeat(7, 1fr); }
+.td-dot { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 4px 0; border: 0; background: none; color: var(--text2); font-size: 12px; font-weight: 600; }
+.td-dot i { width: 10px; height: 10px; margin: 11px 0; border-radius: 50%; background: var(--track); transition: transform 0.25s var(--ease), opacity 0.2s; }
 .td-dot.fit i { background: var(--kcal); }
 .td-dot.under i { background: color-mix(in srgb, var(--kcal) 40%, var(--track)); }
 .td-dot.over i { background: var(--fat); }
 .td-dot.now i { background: none; box-shadow: inset 0 0 0 2px var(--kcal); }
-.td-dot.future i { background: none; box-shadow: inset 0 0 0 1.5px var(--track); }
-.td-dot.sel { color: var(--text); }
-.td-dot.sel i { transform: scale(1.3); }
+.td-dot.future i { background: none; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text2) 45%, transparent); }
+.td-dot.sel { color: var(--text); font-weight: 700; }
+.td-dot.sel i { opacity: 0; transform: scale(0.4); }
+/* Picked day: a bubble with the date glides to it (slight overshoot), stretching as it moves; green when it's today. */
+.td-bubble { position: absolute; left: 0; bottom: 4px; width: calc(100% / 7); height: 32px; display: grid; place-items: center; pointer-events: none;
+  transform: translateX(calc(var(--sel) * 100%)); transition: transform 0.5s cubic-bezier(0.34, 1.3, 0.5, 1); }
+.td-bubble i { font-style: normal; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--text); color: var(--bg);
+  transition: background-color 0.3s ease, color 0.3s ease; animation: bubbleGlide 0.5s cubic-bezier(0.3, 0.7, 0.3, 1); }
+.td-bubble.now i { background: var(--kcal); color: #fff; }
+.td-bubble b { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; font-family: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif; animation: bubbleNum 0.35s var(--ease) 0.12s both; }
+@keyframes bubbleGlide { 0% { transform: scale(0.75); } 35% { transform: scale(1.22, 0.86); } 100% { transform: none; } }
+@keyframes bubbleNum { from { opacity: 0; transform: scale(0.6); } }
 .td-weektext { margin: 12px 0 0; text-align: center; font-size: 14px; color: var(--text2); font-variant-numeric: tabular-nums; }
 .td-weektext b { font-weight: 600; color: var(--text); }
 .td-weektext b.over { color: var(--fat); }
@@ -368,6 +383,9 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 .td-addrow.quiet { color: var(--text); }
 .td-addrow.quiet span { background: var(--card2); color: var(--text2); }
 .td-note { margin: 12px 4px 0; font-size: 13px; color: var(--text2); text-align: center; }
+.td-note.flash { animation: fadeIn 0.25s var(--ease) both, fadeOut 0.4s ease 3.2s forwards; }
+.td-when { margin: 10px 0 0; }
+.add-toast.above-tabs { bottom: calc(env(safe-area-inset-bottom) + 96px); }
 
 /* Week */
 
@@ -392,9 +410,23 @@ button:disabled { opacity: 0.4; }
 .addpage {
   min-height: 100dvh; background: transparent;
   padding: calc(var(--top) + 10px) 16px calc(env(safe-area-inset-bottom) + 28px);
-  animation: slideL 0.32s var(--ease) both;
+  /* No fill: a transform held after the slide would make the fixed background cover inside scroll with the page. */
+  animation: slideL 0.32s var(--ease);
 }
-.add-top { display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 8px; margin-bottom: 14px; }
+.add-top { position: sticky; top: calc(var(--top) + 10px); z-index: 7; display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 8px; margin-bottom: 14px; }
+/* Add page: its own background copy covers the header band (and the bottom behind the pinned button), above the content. */
+:root[data-world='add'] .aurora-cover:not(.add-cover) { display: none; }
+.aurora.aurora-cover.add-cover { display: block; z-index: 5;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(var(--top) + 52px), transparent calc(var(--top) + 62px));
+  mask-image: linear-gradient(to bottom, #000 calc(var(--top) + 52px), transparent calc(var(--top) + 62px)); }
+:root { --dock: calc(80px + env(safe-area-inset-bottom)); }
+.addpage.docked { padding-bottom: calc(var(--dock) + 16px); }
+.addpage.docked .add-cover {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(var(--top) + 52px), transparent calc(var(--top) + 62px), transparent calc(100% - var(--dock) - 12px), #000 calc(100% - var(--dock) + 8px));
+  mask-image: linear-gradient(to bottom, #000 calc(var(--top) + 52px), transparent calc(var(--top) + 62px), transparent calc(100% - var(--dock) - 12px), #000 calc(100% - var(--dock) + 8px)); }
+.add-dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 7; max-width: 640px; margin: 0 auto; padding: 12px 16px calc(env(safe-area-inset-bottom) + 14px); animation: rise 0.35s var(--ease) 0.1s both; }
+.add-dock .add-go { margin-top: 0; }
+body:has(.add-done) .add-dock { opacity: 0; transition: opacity 0.15s ease; pointer-events: none; }
 .add-top h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
 .add-back { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: grid; place-items: center; background: var(--card); box-shadow: var(--shadow); }
 .add-day { font-size: 13px; font-weight: 600; color: var(--kcal); background: color-mix(in srgb, var(--kcal) 14%, var(--card)); padding: 5px 11px; border-radius: 999px; }
@@ -469,7 +501,9 @@ button:disabled { opacity: 0.4; }
 .add-describe textarea { background: var(--card); box-shadow: var(--shadow); font-size: 17px; padding: 14px 16px; border-radius: 16px; }
 .add-examples { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 18px; }
 .add-examples button { padding: 8px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--card); color: var(--text2); box-shadow: var(--shadow); animation: pop 0.3s var(--ease) both; }
-.add-busy { display: flex; flex-direction: column; align-items: center; gap: 16px; padding-top: 40px; animation: fadeIn 0.3s var(--ease) both; }
+/* Working screen (reading a label, estimating): photo + progress sit in the middle of the space under the header. */
+.add-busy { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding-bottom: 6vh;
+  min-height: calc(100dvh - var(--top) - 10px - 54px - env(safe-area-inset-bottom) - 28px); animation: fadeIn 0.3s var(--ease) both; }
 .add-photo { width: 70%; max-height: 46dvh; object-fit: cover; border-radius: 18px; box-shadow: var(--shadow); }
 .add-progress { width: 60%; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .add-progress span { display: block; height: 100%; width: 40%; border-radius: 3px; background: linear-gradient(90deg, var(--protein), var(--carbs), var(--fat)); animation: slide 1.1s ease-in-out infinite; }
@@ -1228,3 +1262,9 @@ button.meal-unit { color: var(--kcal); }
 .intro-word .a { color: var(--accent); }
 @keyframes wordIn { from { opacity: 0; transform: translateY(70%); filter: blur(8px); } }
 .intro-skip .intro-tile, .intro-skip .intro-tile *, .intro-skip .intro-tile *::after, .intro-skip .intro-word span, .intro-skip .intro-burst, .intro-skip .ib { animation: none !important; }
+
+/* Rows only light up on a real press: the highlight waits a moment, and is dropped as soon as the finger starts to scroll
+   (main.tsx sets .scrolling), so a scroll that starts on a row or button doesn't flash it (like iOS). */
+.wk-row:active, .add-card > button:active, .st-row-btn:active { transition: background-color 0s linear 0.09s; }
+:root.scrolling .wk-row:active, :root.scrolling .add-card > button:active, :root.scrolling .st-row-btn:active { background: transparent; transition: none; }
+:root.scrolling button:active { transform: none; opacity: 1; }

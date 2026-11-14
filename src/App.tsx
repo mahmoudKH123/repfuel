@@ -45,6 +45,8 @@ export default function App() {
   }
 
   const openAdd = () => {
+    // Only Today shows which day you're on, so from any other tab food always goes to today.
+    if (tab !== 'today') setDate(today)
     // Settings and Train have no food day on screen, so come back to Today after adding.
     if (tab === 'settings' || tab === 'train') setTab('today')
     setAdding(true)
@@ -66,7 +68,7 @@ export default function App() {
         {tab === 'week' && <Week date={date} today={today} onDateChange={setDate} onOpenDay={(d) => { setDate(d); setTab('today') }} />}
         {tab === 'train' && <Train today={today} />}
         {tab === 'settings' && (
-          <Settings today={today} themeMode={themeMode} onThemeMode={setThemeMode} onOpenFoods={() => setAdding(true)} />
+          <Settings today={today} themeMode={themeMode} onThemeMode={setThemeMode} onOpenFoods={() => { setDate(today); setAdding(true) }} />
         )}
       </main>
       <div className="aurora aurora-cover" aria-hidden="true" />
@@ -74,7 +76,7 @@ export default function App() {
         {TABS.map((t, i) => (
           <Fragment key={t.id}>
             {i === 2 && (
-              <button className="tab-add" onClick={openAdd} aria-label="Add food"><span><IconPlus /></span></button>
+              <button className="tab-add" onClick={openAdd} aria-label="Add food"><span key={tab}><IconPlus /></span></button>
             )}
             <button aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>
               {t.icon}

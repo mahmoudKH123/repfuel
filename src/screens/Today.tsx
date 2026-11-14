@@ -1,8 +1,8 @@
-import { useRef, useState, type CSSProperties, type TouchEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type TouchEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { Entry } from '../db/types'
-import { copyDay, deleteEntry, setDayType, updateEntryAmount } from '../db/repo'
+import { copyDay, deleteEntry, restoreEntry, setDayType, updateEntryAmount, updateEntryTime } from '../db/repo'
 import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType, type WeekSummary } from '../logic/budget'
 import { useSettings, useWeek } from '../ui/hooks'
@@ -39,6 +39,20 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
     setShowHint(false)
     try { localStorage.setItem(HINT_KEY, '1') } catch { /* private mode: hint just comes back next time */ }
   }
+  // Short notes ("Copied 3 items") fade after a few seconds.
+  useEffect(() => {
+    if (!notice) return
+    const t = window.setTimeout(() => setNotice(''), 3600)
+    return () => window.clearTimeout(t)
+  }, [notice])
+  // Deleting shows an Undo bar for 5 seconds.
+  const [removed, setRemoved] = useState<Entry | null>(null)
+  useEffect(() => {
+    if (!removed) return
+    const t = window.setTimeout(() => setRemoved(null), 5000)
+    return () => window.clearTimeout(t)
+  }, [removed])
+  const remove = async (e: Entry) => { await deleteEntry(e.id!); setRemoved(e) }
   const [shown, setShown] = useState({ date, dir: '' })
   if (shown.date !== date) setShown({ date, dir: date > shown.date ? 'next' : 'prev' })
   const swipe = useSwipe(() => onDateChange(addDays(date, 1)), () => onDateChange(addDays(date, -1)))
@@ -72,10 +86,14 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
         </button>
       </header>
 
-      <div key={date} className={`dayview ${shown.dir}`} {...swipe}>
+      <div key={`b-${date}`} className={`dayview ${shown.dir}`} {...swipe}>
         <Budget eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
+      </div>
+      {/* The day picker stays put while the day changes, so its date bubble can glide to the new day. */}
+      <div className="dayview" {...swipe}>
         <WeekLine week={week} date={date} today={today} onPick={onDateChange} />
-
+      </div>
+      <div key={`l-${date}`} className={`dayview ${shown.dir}`} {...swipe}>
         <div className="td-loghead">
           <h2>Logged</h2>
           {entries.length > 0 && <button className="td-link" onClick={copyYesterday}>Same as yesterday</button>}
@@ -85,7 +103,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
           <div key={g.key} className="td-group">
             <h3>{g.label}<span>{k(g.items.reduce((t, e) => t + e.kcal, 0))} kcal</span></h3>
             <ul className="td-list">
-              {g.items.map((e, i) => <EntryRow key={e.id} entry={e} index={i} onUsed={hideHint} />)}
+              {g.items.map((e, i) => <EntryRow key={e.id} entry={e} index={i} onUsed={hideHint} onDelete={remove} />)}
             </ul>
           </div>
         ))}
@@ -106,8 +124,14 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
           </div>
         </div>
         {showHint && entries.length > 0 && <p className="td-note">Tap a food to change it, swipe left to delete.</p>}
-        {notice && <p className="td-note" role="status">{notice}</p>}
+        {notice && <p key={notice} className="td-note flash" role="status">{notice}</p>}
       </div>
+      {removed && (
+        <div className="add-toast above-tabs" role="status">
+          <span>{removed.name} deleted</span>
+          <button onClick={() => { restoreEntry(removed); setRemoved(null) }}>Undo</button>
+        </div>
+      )}
     </section>
   )
 }
@@ -115,8 +139,10 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
 /** A day "fits" when it lands within 10% of its own calorie target. */
 const FIT = 0.1
 
-/** Seven days as dots (also the day picker) and one sentence about the week. */
+/** Seven days as dots (also the day picker) and one sentence about the week. The picked day wears a bubble with its date
+ *  (green on today, ink on any other day) that glides between days; today keeps its green ring when another day is picked. */
 function WeekLine({ week, date, today, onPick }: { week: WeekSummary; date: string; today: string; onPick: (d: string) => void }) {
+  const sel = Math.max(0, week.days.findIndex((d) => d.date === date))
   const done = week.days.filter((d) => d.date < today)
   const banked = done.reduce((t, d) => t + d.target.kcal - d.eaten.kcal, 0)
   const weekOver = week.daysLeft === 0 ? week.left.kcal < 0 : banked < 0
@@ -125,7 +151,10 @@ function WeekLine({ week, date, today, onPick }: { week: WeekSummary; date: stri
 
   return (
     <div className="td-week">
-      <div className="td-dots" role="list" aria-label="This week">
+      <div className="td-dots" role="list" aria-label="This week" style={{ '--sel': sel } as CSSProperties}>
+        <span className={`td-bubble${date === today ? ' now' : ''}`} aria-hidden="true">
+          <i key={date}><b>{Number(date.slice(8))}</b></i>
+        </span>
         {week.days.map((d) => {
           const ratio = d.target.kcal ? d.eaten.kcal / d.target.kcal : 0
           const state = d.date > today ? 'future' : d.date === today ? 'now'
@@ -160,7 +189,7 @@ function WeekLine({ week, date, today, onPick }: { week: WeekSummary; date: stri
 
 const OPEN = -88
 
-function EntryRow({ entry: e, index, onUsed }: { entry: Entry; index: number; onUsed: () => void }) {
+function EntryRow({ entry: e, index, onUsed, onDelete }: { entry: Entry; index: number; onUsed: () => void; onDelete: (e: Entry) => void }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [amount, setAmount] = useState(String(e.amount))
@@ -218,7 +247,7 @@ function EntryRow({ entry: e, index, onUsed }: { entry: Entry; index: number; on
   return (
     <li className="td-row" style={{ animationDelay: `${0.05 + index * 0.05}s` }}>
       <div className="entry-swipe">
-        <button className="entry-del" style={{ visibility: x < 0 ? 'visible' : 'hidden' }} onClick={() => deleteEntry(e.id!)} aria-label={`Delete ${e.name}`} tabIndex={open ? 0 : -1}>Delete</button>
+        <button className="entry-del" style={{ visibility: x < 0 ? 'visible' : 'hidden' }} onClick={() => onDelete(e)} aria-label={`Delete ${e.name}`} tabIndex={open ? 0 : -1}>Delete</button>
         <div
           className={`td-face${drag !== null ? ' dragging' : ''}`}
           style={{ transform: `translateX(${x}px)` }}
@@ -243,12 +272,33 @@ function EntryRow({ entry: e, index, onUsed }: { entry: Entry; index: number; on
             <span><i style={{ background: 'var(--fat)' }} />{r1(e.fat)}g fat</span>
           </div>
           <form className="entry-edit" onSubmit={(ev) => { ev.preventDefault(); save() }}>
-            <input type="number" inputMode="decimal" step="any" min="0" value={amount} onChange={(ev) => setAmount(ev.target.value)} autoFocus aria-label="Amount" />
+            <input type="number" inputMode="decimal" step="any" min="0" value={amount} onChange={(ev) => setAmount(ev.target.value)} aria-label="Amount" />
             <button type="submit" className="primary">Save</button>
-            <button type="button" className="danger" onClick={() => deleteEntry(e.id!)}>Delete</button>
+            <button type="button" className="danger" onClick={() => onDelete(e)}>Delete</button>
           </form>
+          <WhenSwitch entry={e} />
         </div>
       )}
     </li>
+  )
+}
+
+/** Morning / Afternoon / Evening for one logged item. Moving it keeps the minutes, only the hour changes. */
+function WhenSwitch({ entry: e }: { entry: Entry }) {
+  const hour = new Date(e.createdAt).getHours()
+  const at = TIMES.findIndex((t) => hour < t.until)
+  const move = (i: number) => {
+    if (i === at) return
+    const d = new Date(e.createdAt)
+    d.setHours([9, 14, 19][i])
+    updateEntryTime(e.id!, d.getTime())
+  }
+  return (
+    <div className="unit-seg td-when" role="radiogroup" aria-label="Part of the day" style={{ '--n': 3, '--i': at } as CSSProperties}>
+      <span className="unit-thumb" aria-hidden />
+      {TIMES.map((t, i) => (
+        <button key={t.key} type="button" role="radio" aria-checked={i === at} onClick={() => move(i)}>{t.label}</button>
+      ))}
+    </div>
   )
 }

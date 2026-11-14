@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import { deleteEntry, logFood, logQuick, saveFood } from '../db/repo'
@@ -163,7 +164,9 @@ export function AddFood({ date, today, onClose }: Props) {
   const back = () => (view.kind === 'home' ? onClose() : setView({ kind: 'home' }))
 
   return (
-    <div className="addpage" role="dialog" aria-label="Add food">
+    <div className={`addpage${view.kind === 'detail' || view.kind === 'meal' ? ' docked' : ''}`} role="dialog" aria-label="Add food">
+      {/* Copy of the page background over the header (and the Add button when there is one), so content scrolls under cleanly. */}
+      <div className="aurora aurora-cover add-cover" aria-hidden="true" />
       <header className="add-top">
         <button className="add-back" onClick={back} aria-label={view.kind === 'home' ? 'Close' : 'Back'}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
@@ -180,6 +183,7 @@ export function AddFood({ date, today, onClose }: Props) {
             <svg className="add-box-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4 4" /></svg>
             <input
               type="search" enterKeyHint="search" placeholder="What did you eat?" value={query}
+              autoCorrect="off" autoCapitalize="none" spellCheck={false}
               onChange={(e) => { setQuery(e.target.value); setError('') }}
               aria-label="What did you eat?"
             />
@@ -393,7 +397,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   }
 
   return (
-    <form className="add-detail" onSubmit={(e) => { e.preventDefault(); submit() }}>
+    <form id="add-form" className="add-detail" onSubmit={(e) => { e.preventDefault(); submit() }}>
       <div className="add-hero">
         <PortionRing kcal={portion.kcal} eaten={eaten} target={target} />
 
@@ -494,7 +498,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
       )}
 
       {error && <p className="warn add-error">{error}</p>}
-      <button type="submit" className="primary add-go">Add {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button>
+      <Dock><button type="submit" form="add-form" className="primary add-go">Add {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button></Dock>
     </form>
   )
 }
@@ -551,7 +555,7 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone }: { nam
   }
 
   return (
-    <form className="add-detail" onSubmit={(e) => { e.preventDefault(); submit() }}>
+    <form id="add-form" className="add-detail" onSubmit={(e) => { e.preventDefault(); submit() }}>
       <div className="add-hero">
         <PortionRing kcal={totals.kcal} eaten={eaten} target={target} />
         <input className="add-name" value={name} onChange={(e) => { setName(e.target.value); setError('') }} placeholder="Meal name" aria-label="Meal name" />
@@ -570,7 +574,7 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone }: { nam
       </ul>
 
       {error && <p className="warn add-error">{error}</p>}
-      <button type="submit" className="primary add-go" disabled={busy}>Add meal {on.length ? `${k(totals.kcal)} kcal` : ''}</button>
+      <Dock><button type="submit" form="add-form" className="primary add-go" disabled={busy}>Add meal {on.length ? `${k(totals.kcal)} kcal` : ''}</button></Dock>
     </form>
   )
 }
@@ -660,4 +664,9 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
       <button type="submit" className="primary add-go" disabled={!text.trim()}>Estimate</button>
     </form>
   )
+}
+
+/** The page's main button, pinned to the bottom of the screen so it's always in reach. */
+function Dock({ children }: { children: ReactNode }) {
+  return createPortal(<div className="add-dock">{children}</div>, document.body)
 }

@@ -15,9 +15,10 @@ const MACROS = [
 export function Budget({ eaten, target, fatOver, scope = 'today' }: { eaten: Macros; target: Macros; fatOver: number; scope?: string }) {
   const left = target.kcal - eaten.kcal
   const over = left < 0
-  const shown = useCountUp(Math.abs(left), 800)
+  // Remembered per page, so switching day rolls the number from its last value instead of restarting at 0.
+  const shown = useCountUp(Math.abs(left), 800, 0, `${scope}-left`)
   const ratio = target.kcal ? Math.min(1, eaten.kcal / target.kcal) : 0
-  const fill = useFill(ratio)
+  const fill = useFill(ratio, `${scope}-bar`)
   const kp = eaten.protein * 4, kc = eaten.carbs * 4, kf = eaten.fat * 9
   const tot = kp + kc + kf
   // The bar is coloured by where today's calories came from (P / C / F share), green until something is logged.
@@ -33,7 +34,7 @@ export function Budget({ eaten, target, fatOver, scope = 'today' }: { eaten: Mac
       </div>
       <div className="td-macros">
         {MACROS.map((m, i) => (
-          <MacroCol key={m.key} label={m.label} color={m.color} eaten={eaten[m.key]} goal={target[m.key]} index={i} />
+          <MacroCol key={m.key} memo={`${scope}-${m.key}`} label={m.label} color={m.color} eaten={eaten[m.key]} goal={target[m.key]} index={i} />
         ))}
       </div>
       {fatOver > 0 && <p className="td-warn">Fat is {r1(fatOver)} g over {scope}</p>}
@@ -41,8 +42,8 @@ export function Budget({ eaten, target, fatOver, scope = 'today' }: { eaten: Mac
   )
 }
 
-function MacroCol({ label, color, eaten, goal, index }: { label: string; color: string; eaten: number; goal: number; index: number }) {
-  const fill = useFill(goal ? Math.min(1, eaten / goal) : 0)
+function MacroCol({ label, color, eaten, goal, index, memo }: { label: string; color: string; eaten: number; goal: number; index: number; memo: string }) {
+  const fill = useFill(goal ? Math.min(1, eaten / goal) : 0, memo)
   const over = goal > 0 && eaten > goal
   return (
     <div className="td-macro">
