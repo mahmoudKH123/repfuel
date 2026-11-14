@@ -323,6 +323,18 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 .td-macro-val.over { color: var(--fat); }
 .td-macro-track { height: 3px; margin-top: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
 .td-macro-track span { display: block; height: 100%; border-radius: 2px; transition: width 0.8s var(--ease); }
+/* Grams left under each macro: a rolling fuel-pump counter. */
+.td-left { margin-top: 7px; font-size: 13px; font-weight: 600; color: var(--text2); font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1.25; }
+.td-left.over { color: var(--fat); }
+.td-left .odo { color: var(--c); font-weight: 700; }
+.td-left.over .odo { color: var(--fat); }
+.odo { display: inline-flex; vertical-align: bottom; font-family: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif; }
+.odo-wheel { display: inline-block; height: 1.25em; overflow: hidden; -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
+.odo-wheel > span { display: flex; flex-direction: column; transition: transform 1s cubic-bezier(0.34, 1.32, 0.5, 1); }
+.odo-wheel i { font-style: normal; height: 1.25em; text-align: center; }
+.td-left-hit { display: inline-flex; align-items: center; gap: 5px; color: var(--c); animation: pop 0.45s var(--ease) both; }
+.td-left-hit svg { stroke-dasharray: 24; stroke-dashoffset: 24; animation: draw 0.4s 0.15s var(--ease) forwards; }
+@media (prefers-reduced-motion: reduce) { .odo-wheel > span { transition: none; } .odo-wheel { -webkit-mask-image: none; mask-image: none; } }
 .td-warn { margin: 14px 0 0; font-size: 13px; font-weight: 600; color: var(--fat); }
 
 .td-week { margin-top: 28px; padding-top: 18px; border-top: 0.5px solid var(--line); }
