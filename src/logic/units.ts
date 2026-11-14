@@ -16,7 +16,10 @@ const NOUNS = ['piece', 'slice', 'cup', 'scoop', 'plate', 'sandwich', 'bar', 'eg
 /** "1 slice, 30g" -> "slice". Falls back to "serving". */
 export function servingNoun(label = ''): string {
   const l = label.toLowerCase()
-  return NOUNS.find((n) => new RegExp(`\\b${n}(e?s)?\\b`).test(l)) ?? 'serving'
+  const known = NOUNS.find((n) => new RegExp(`\\b${n}(e?s)?\\b`).test(l))
+  if (known) return known
+  // "1 banana" / "1 medium banana" -> "banana" (one optional size word, nothing else).
+  return l.trim().match(/^1\s+(?:[a-z]+\s+)?([a-z]{3,})$/)?.[1] ?? 'serving'
 }
 
 const plural = (n: string) => (n === 'sandwich' ? 'sandwiches' : n === 'glass' ? 'glasses' : n.endsWith('s') ? n : n + 's')

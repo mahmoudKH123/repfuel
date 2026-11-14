@@ -18,6 +18,10 @@ describe('units', () => {
     expect(servingNoun('2 pieces')).toBe('piece')
     expect(servingNoun('1 medium plate')).toBe('plate')
     expect(servingNoun('')).toBe('serving')
+    expect(servingNoun('1 medium banana')).toBe('banana')
+    expect(servingNoun('1 banana')).toBe('banana')
+    expect(servingNoun('1 portion of rice')).toBe('serving')
+    expect(servingNoun('150g')).toBe('serving')
   })
 
   it('offers units only when it can convert', () => {

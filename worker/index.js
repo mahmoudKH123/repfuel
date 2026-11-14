@@ -1,13 +1,14 @@
 // RepFuel AI proxy (Cloudflare Worker).
 // Holds the Gemini key so it never reaches the browser. Two jobs:
-//   POST { mode: "text",  text }               -> estimate for a described food (overestimates on purpose)
+//   POST { mode: "text",  text }               -> estimate for one described food (kept for older app versions)
+//   POST { mode: "meal",  text, foods }        -> the meal split into items; `foods` = the user's saved foods, one per line
 //   POST { mode: "label", image, mimeType }    -> exact values read from a nutrition-facts photo
-// Reply: { food: { name, baseAmount, unit, servingLabel, defaultAmount, kcal, protein, carbs, fat, confidence, note }, model }
+// Reply: { food: {...}, model } for text/label, { meal: { name, note, items: [...] }, model } for meal
 
 const RULES_TEXT = `You estimate calories and macros for foods eaten by a gym-goer in Egypt.
 Rules:
-- ALWAYS overestimate to be safe: when unsure, pick the higher realistic value for calories and fat, and assume generous Egyptian portions.
-- Home cooking and restaurant food: always include cooking oil, butter or ghee.
+- Be realistic: give your best honest estimate, not a padded one, and assume normal Egyptian portions.
+- Home cooking and restaurant food: always include the cooking oil, butter, ghee or sauce it is normally made with (the usual hidden calories).
 - For branded products, chains and restaurants (e.g. Abou Tarek), use what you know about their typical portions and recipes.
 - Give values for exactly what the user described (one serving = the amount they said, or a normal Egyptian portion).
 - Round kcal up to the nearest 5 and grams up to whole numbers.
@@ -16,6 +17,21 @@ Rules:
 - liquid: true for drinks and soups you measure in ml, else false.
 Reply as JSON:
 {"name": string (short, clear, in English), "servingLabel": string (e.g. "1 medium plate"), "kcal": number, "protein": number, "carbs": number, "fat": number, "confidence": "high"|"medium"|"low", "note": string (one short line on assumptions)}`
+
+const RULES_MEAL = `You estimate calories and macros for a meal eaten by a gym-goer in Egypt.
+Split the meal into its separate items (e.g. "koshary and a pepsi" = 2 items; "chicken, rice and salad" = 3 items). A dish eaten as one thing (a sandwich, a plate of koshary) is ONE item.
+Rules:
+- Be realistic: give your best honest estimate, not a padded one, and assume normal Egyptian portions.
+- Home cooking and restaurant food: always include the cooking oil, butter, ghee or sauce it is normally made with (the usual hidden calories).
+- For branded products, chains and restaurants (e.g. Abou Tarek), use what you know about their typical portions and recipes.
+- The user's saved foods are listed below as "#id | name | numbers per amount". If an item clearly IS one of them, set matchId to that id and amount to how much was eaten in that food's unit (grams for "per 100 g", ml for "per 100 ml", servings for "per 1 serving"). Then still fill the other fields with your best values, including eatenGrams (the TOTAL grams or ml eaten).
+- Otherwise matchId = 0 and amount = 0. Give eatenGrams = the TOTAL weight eaten in grams (TOTAL ml for drinks), and kcal/protein/carbs/fat for that WHOLE eaten amount (e.g. "300ml milk" -> eatenGrams 300 and the kcal of all 300 ml). servingLabel = ONE countable unit (e.g. "1 egg", "1 medium plate", "1 glass") and gramsPerServing = the weight of ONE such unit, or 0 if it is not countable (e.g. rice by weight).
+- servingLabel is always "1 <thing>", e.g. "1 banana", "1 egg", "1 medium plate".
+- statedWeight: true if the user wrote this item's amount as a weight or volume (g, kg, ml, L, e.g. "120g banana"), else false.
+- liquid: true for drinks and soups you measure in ml.
+- name: short, clear, in English. mealName: a short name for the whole meal (e.g. "Koshary lunch").
+- confidence per item: "high" for branded/known items, "medium" for typical dishes, "low" for vague ones.
+- note per item: one short line on what you assumed, or "".`
 
 const RULES_LABEL = `Read the nutrition facts label in this photo (it may be in English and/or Arabic).
 Rules:
@@ -61,9 +77,43 @@ const TEXT_SCHEMA = {
   required: ['name', 'servingLabel', 'gramsPerServing', 'liquid', 'kcal', 'protein', 'carbs', 'fat', 'confidence', 'note'],
 }
 
+const MEAL_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    mealName: { type: 'STRING' },
+    items: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING' },
+          matchId: { type: 'INTEGER' },
+          amount: { type: 'NUMBER' },
+          eatenGrams: { type: 'NUMBER' },
+          servingLabel: { type: 'STRING' },
+          gramsPerServing: { type: 'NUMBER' },
+          liquid: { type: 'BOOLEAN' },
+          statedWeight: { type: 'BOOLEAN' },
+          kcal: { type: 'NUMBER' },
+          protein: { type: 'NUMBER' },
+          carbs: { type: 'NUMBER' },
+          fat: { type: 'NUMBER' },
+          confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] },
+          note: { type: 'STRING' },
+        },
+        required: ['name', 'matchId', 'amount', 'eatenGrams', 'servingLabel', 'gramsPerServing', 'liquid', 'statedWeight', 'kcal', 'protein', 'carbs', 'fat', 'confidence', 'note'],
+      },
+    },
+  },
+  required: ['mealName', 'items'],
+}
+
+const MAX_FOODS_TEXT = 15_000 // saved-food list sent with meal requests
+
 // Low thinking keeps answers fast (default "medium" took 2+ minutes). Each model gets 25 s before we move on.
 const THINKING = { thinkingConfig: { thinkingLevel: 'low' } }
 const MODEL_TIMEOUT_MS = 25_000
+const TOTAL_BUDGET_MS = 50_000 // the app gives up at 60 s, so always answer before that
 
 const MAX_IMAGE_B64 = 4_000_000 // ~3 MB photo; the app shrinks photos well below this
 
@@ -97,6 +147,12 @@ export default {
         contents: [{ parts: [{ text: `${RULES_TEXT}\n\nFood: ${body.text.trim().slice(0, 500)}` }] }],
         generationConfig: { responseMimeType: 'application/json', responseSchema: TEXT_SCHEMA, ...THINKING },
       }
+    } else if (body.mode === 'meal' && typeof body.text === 'string' && body.text.trim()) {
+      const foods = typeof body.foods === 'string' ? body.foods.slice(0, MAX_FOODS_TEXT) : ''
+      payload = {
+        contents: [{ parts: [{ text: `${RULES_MEAL}\n\nSaved foods:\n${foods || '(none)'}\n\nMeal: ${body.text.trim().slice(0, 800)}` }] }],
+        generationConfig: { responseMimeType: 'application/json', responseSchema: MEAL_SCHEMA, ...THINKING },
+      }
     } else if (body.mode === 'label' && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64) {
       payload = {
         contents: [{ parts: [{ text: RULES_LABEL }, { inline_data: { mime_type: body.mimeType || 'image/jpeg', data: body.image } }] }],
@@ -107,33 +163,27 @@ export default {
     }
 
     let lastStatus = 0
+    const deadline = Date.now() + TOTAL_BUDGET_MS
     for (const model of env.MODELS.split(',').map((m) => m.trim())) {
-      let res
-      try {
-        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
-        })
-      } catch {
-        console.log(JSON.stringify({ model, status: 'timeout' }))
-        lastStatus = 504
-        continue
-      }
-      lastStatus = res.status
-      if (!res.ok) {
-        // Google's error text only (never the key), visible with `wrangler tail`.
-        const detail = await res.clone().json().catch(() => ({}))
-        console.log(JSON.stringify({ model, status: res.status, error: String(detail.error?.message ?? '').slice(0, 300) }))
-      }
-      // 429 = free limit used up, 404 = model retired, 5xx = Google hiccup. Try the next model.
-      if (res.status === 429 || res.status === 404 || res.status >= 500) continue
-      if (!res.ok) return reply(502, { error: `AI error (${res.status}).` })
-      const data = await res.json()
+      const left = deadline - Date.now()
+      if (left < 4_000) break
+      const t0 = Date.now()
+      const r = await callModel(model, payload, env.GEMINI_API_KEY, Math.min(MODEL_TIMEOUT_MS, left))
+      // Status and timing only (never the key or food text), visible with `wrangler tail`.
+      console.log(JSON.stringify({ mode: body.mode, model, status: r.status, ms: Date.now() - t0, error: r.error }))
+      lastStatus = r.status
+      // 429 = free limit used up, 404 = model retired, 5xx/504 = Google hiccup or too slow. Try the next model.
+      if (r.status === 429 || r.status === 404 || r.status >= 500) continue
+      if (r.status !== 200) return reply(502, { error: `AI error (${r.status}).` })
+      const data = r.data
       const text = (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('')
       const raw = parseJson(text)
       if (!raw) return reply(502, { error: 'AI gave an unreadable answer. Try again.' })
+      if (body.mode === 'meal') {
+        const meal = fromMeal(raw)
+        if (!meal.items.length) return reply(502, { error: 'AI found no food in that. Try describing it differently.' })
+        return reply(200, { meal, model })
+      }
       return reply(200, { food: body.mode === 'label' ? fromLabel(raw) : fromText(raw), model })
     }
     return reply(503, {
@@ -160,6 +210,23 @@ function fromText(r) {
   }
 }
 
+function fromMeal(r) {
+  const items = (Array.isArray(r.items) ? r.items : []).slice(0, 15).map((i) => ({
+    name: String(i.name ?? 'Food').slice(0, 80),
+    matchId: Number.isInteger(i.matchId) && i.matchId > 0 ? i.matchId : 0,
+    amount: num(i.amount),
+    eatenGrams: num(i.eatenGrams),
+    servingLabel: String(i.servingLabel ?? '1 serving').slice(0, 60),
+    gramsPerServing: num(i.gramsPerServing) || undefined,
+    liquid: i.liquid === true,
+    statedWeight: i.statedWeight === true,
+    kcal: num(i.kcal), protein: num(i.protein), carbs: num(i.carbs), fat: num(i.fat),
+    confidence: conf(i.confidence),
+    note: String(i.note ?? '').slice(0, 200),
+  }))
+  return { name: String(r.mealName ?? 'Meal').slice(0, 80), items }
+}
+
 function fromLabel(r) {
   const serving = num(r.servingGrams)
   const per100 = r.basis === 'per100g' || r.basis === 'per100ml'
@@ -176,6 +243,33 @@ function fromLabel(r) {
     confidence: conf(r.confidence),
     note: String(r.note ?? '').slice(0, 200),
   }
+}
+
+/**
+ * One Gemini call with a HARD time limit covering the whole call (connect + body).
+ * Returns { status, data } or { status, error }; 504 = too slow.
+ */
+async function callModel(model, payload, key, ms) {
+  const ctrl = new AbortController()
+  let timer
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => { ctrl.abort(); resolve({ status: 504, error: 'timeout' }) }, ms)
+  })
+  const call = (async () => {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      })
+      const data = await res.json().catch(() => ({}))
+      return res.ok ? { status: 200, data } : { status: res.status, error: String(data.error?.message ?? '').slice(0, 300) }
+    } catch {
+      return { status: 504, error: 'network or timeout' }
+    }
+  })()
+  try { return await Promise.race([call, timeout]) } finally { clearTimeout(timer) }
 }
 
 /** Pulls the JSON object out of a reply, even if wrapped in ```json fences or extra words. */

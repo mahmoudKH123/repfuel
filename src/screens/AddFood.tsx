@@ -4,8 +4,9 @@ import { db } from '../db/db'
 import { deleteEntry, logFood, logQuick, saveFood } from '../db/repo'
 import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
+import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type MealItem } from '../logic/meal'
 import { formatDay } from '../logic/dates'
-import { askAi, photoToBase64 } from '../logic/ai'
+import { askAi, askMeal, photoToBase64 } from '../logic/ai'
 import { searchByName } from '../logic/search'
 import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
@@ -36,9 +37,11 @@ interface Draft extends Macros {
   note?: string
   gramsPerServing?: number
   liquid?: boolean
+  /** Unit the amount box opens in, when it differs from `unit` (e.g. AI eggs: macros per g, shown as pieces). */
+  initialUnit?: AmountUnit
 }
 
-type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string; photo?: string } | { kind: 'detail'; draft: Draft }
+type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string; photo?: string } | { kind: 'detail'; draft: Draft } | { kind: 'meal'; name: string; items: MealItem[] }
 
 export function AddFood({ date, today, onClose }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
@@ -100,6 +103,33 @@ export function AddFood({ date, today, onClose }: Props) {
         kind: 'detail',
         draft: { source: req.mode === 'label' ? 'label' : 'ai', name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel, amount: f.defaultAmount, estimate: req.mode === 'text', confidence: f.confidence, note: f.note, gramsPerServing: f.gramsPerServing, liquid: f.liquid, kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat },
       })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong.')
+      setView({ kind: 'home' })
+    }
+  }
+
+  // Described food or meal: the AI splits it into items. One item opens the normal detail; more open the meal list.
+  const runMeal = async (text: string) => {
+    setError('')
+    setView({ kind: 'busy', label: 'Estimating…' })
+    try {
+      const meal = await askMeal(text, foodsContext(foods))
+      const items = buildItems(meal, foods)
+      if (items.length === 1) {
+        const i = items[0]
+        if (i.food) {
+          const f = i.food
+          setView({ kind: 'detail', draft: { source: 'saved', food: f, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel ?? fmtAmount(f.baseAmount, f.unit), amount: i.amount, initialUnit: i.unit, estimate: f.estimate, ...labelGrams(f), kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat } })
+        } else {
+          // Countable (egg, banana): numbers per piece so the page says "eggs"; otherwise per the weight eaten.
+          const perPiece = i.baseUnit !== 'serving' && i.gramsPerServing
+          const base = perPiece ? round1All(scaleFood({ ...i.base, baseAmount: i.baseAmount }, i.gramsPerServing!)) : i.base
+          setView({ kind: 'detail', draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: true, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, ...base } })
+        }
+        return
+      }
+      setView({ kind: 'meal', name: meal.name, items })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong.')
       setView({ kind: 'home' })
@@ -195,13 +225,13 @@ export function AddFood({ date, today, onClose }: Props) {
             ))}
             {q && (
               <li style={{ animationDelay: `${0.04 * Math.min(matches.length, 8)}s` }} className={`add-card add-ai${matches.length ? '' : ' solo'}`}>
-                <button onClick={() => runAi('Estimating…', { mode: 'text', text: query.trim() })}>
+                <button onClick={() => runMeal(query.trim())}>
                   <span className="add-ai-dot" aria-hidden="true">
                     <IconAi size={20} />
                   </span>
                   <span className="add-card-text">
                     <strong>Estimate “{query.trim()}”</strong>
-                    <small>AI guess, leans high to keep you safe</small>
+                    <small>AI estimate, splits a meal into items</small>
                   </span>
                 </button>
               </li>
@@ -211,7 +241,7 @@ export function AddFood({ date, today, onClose }: Props) {
       )}
 
       {view.kind === 'describe' && (
-        <Describe initial={query.trim()} onEstimate={(text) => runAi('Estimating…', { mode: 'text', text })} />
+        <Describe initial={query.trim()} onEstimate={runMeal} />
       )}
 
       {view.kind === 'edit' && (
@@ -228,6 +258,10 @@ export function AddFood({ date, today, onClose }: Props) {
 
       {view.kind === 'detail' && (
         <Detail key={view.draft.name + view.draft.source} draft={view.draft} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} onEdit={view.draft.food ? () => setView({ kind: 'edit', food: view.draft.food! }) : undefined} />
+      )}
+
+      {view.kind === 'meal' && (
+        <Meal name={view.name} initial={view.items} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
       )}
 
       {toast && (
@@ -286,14 +320,6 @@ const MAC = [
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ] as const
 
-/** Serving weight for saved foods: from the label ("1 scoop, 36g"), or the base amount for gram/ml foods. */
-function labelGrams(f: Food): { gramsPerServing?: number; liquid?: boolean } {
-  const fromLabel = gramsFromLabel(f.servingLabel)
-  if (f.unit === 'serving') return fromLabel ? { gramsPerServing: fromLabel.amount, liquid: fromLabel.liquid } : {}
-  if (f.unit === 'g' || f.unit === 'ml') return { liquid: f.unit === 'ml', gramsPerServing: fromLabel && f.servingLabel && !/^\s*\d+\s*(g|ml)\s*$/i.test(f.servingLabel) ? fromLabel.amount : undefined }
-  return {}
-}
-
 function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; eaten: number; target: number; date: string; onDone: () => void; onEdit?: () => void }) {
   const editable = draft.source !== 'saved'
   const [name, setName] = useState(draft.name)
@@ -314,7 +340,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   const info: UnitInfo = { base: eff.unit, gramsPerServing: eff.gramsPerServing, liquid: eff.liquid }
   const units = availableUnits(info)
   const noun = servingNoun(eff.servingLabel)
-  const [unit, setUnit] = useState<AmountUnit>(draft.unit === 'spray' ? 'spray' : draft.unit)
+  const [unit, setUnit] = useState<AmountUnit>(draft.initialUnit ?? draft.unit)
   const [amount, setAmount] = useState(String(draft.amount))
   // Changing the basis or weight can remove the unit in use; fall back to the first one that still works.
   const setManual = (b: Basis, w: string, wu: 'g' | 'ml') => {
@@ -341,14 +367,6 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   // "≈ 170 g" / "≈ 1½ cups": the same amount in the other unit, so switching never feels like guessing.
   const other = units.find((u) => u !== unit && (unit === 'serving' ? true : u === 'serving'))
   const equiv = other && amt > 0 ? convert(amt, unit, other, info) : 0
-
-  // Ring: grey = already eaten today, green = this portion on top.
-  const before = target ? Math.min(1, eaten / target) : 0
-  const after = target ? Math.min(1, (eaten + portion.kcal) / target) : 0
-  const over = target > 0 && eaten + portion.kcal > target
-  const shownKcal = useCountUp(portion.kcal, 700, 150)
-  const drawn = useCountUp(after, 900, 200)
-  const S = 176, W = 14, r = (S - W) / 2, c = 2 * Math.PI * r
 
   const submit = async () => {
     if (!name.trim()) return setError('Give it a name.')
@@ -377,20 +395,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   return (
     <form className="add-detail" onSubmit={(e) => { e.preventDefault(); submit() }}>
       <div className="add-hero">
-        <div className="add-ring" style={{ width: S, height: S }}>
-          <svg className="kring" width={S} height={S} viewBox={`0 0 ${S} ${S}`} aria-hidden="true">
-            <circle cx={S / 2} cy={S / 2} r={r} strokeWidth={W} className="kring-track" />
-            {drawn > before + 0.003 && (
-              <circle cx={S / 2} cy={S / 2} r={r} strokeWidth={W} className={`kring-arc${over ? ' over' : ''}`} strokeDasharray={`${drawn * c} ${c}`} />
-            )}
-            {before > 0.003 && <circle cx={S / 2} cy={S / 2} r={r} strokeWidth={W} className="add-ring-eaten" strokeDasharray={`${before * c} ${c}`} />}
-          </svg>
-          <div className="add-ring-center">
-            <strong className={over ? 'over' : ''}>{k(shownKcal)}</strong>
-            <span>kcal</span>
-            {target > 0 && <small>{over ? `${k(eaten + portion.kcal - target)} over` : `${k(target - eaten - portion.kcal)} left after`}</small>}
-          </div>
-        </div>
+        <PortionRing kcal={portion.kcal} eaten={eaten} target={target} />
 
         {editable ? (
           <input className="add-name" value={name} onChange={(e) => { setName(e.target.value); setError('') }} placeholder="Name, e.g. Chicken wrap" aria-label="Food name" />
@@ -494,7 +499,128 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
   )
 }
 
+/** Ring: grey = already eaten today, green = this portion on top. */
+function PortionRing({ kcal, eaten, target }: { kcal: number; eaten: number; target: number }) {
+  const before = target ? Math.min(1, eaten / target) : 0
+  const after = target ? Math.min(1, (eaten + kcal) / target) : 0
+  const over = target > 0 && eaten + kcal > target
+  const shownKcal = useCountUp(kcal, 700, 150)
+  const drawn = useCountUp(after, 900, 200)
+  const S = 176, W = 14, r = (S - W) / 2, c = 2 * Math.PI * r
+  return (
+    <div className="add-ring" style={{ width: S, height: S }}>
+      <svg className="kring" width={S} height={S} viewBox={`0 0 ${S} ${S}`} aria-hidden="true">
+        <circle cx={S / 2} cy={S / 2} r={r} strokeWidth={W} className="kring-track" />
+        {drawn > before + 0.003 && (
+          <circle cx={S / 2} cy={S / 2} r={r} strokeWidth={W} className={`kring-arc${over ? ' over' : ''}`} strokeDasharray={`${drawn * c} ${c}`} />
+        )}
+        {before > 0.003 && <circle cx={S / 2} cy={S / 2} r={r} strokeWidth={W} className="add-ring-eaten" strokeDasharray={`${before * c} ${c}`} />}
+      </svg>
+      <div className="add-ring-center">
+        <strong className={over ? 'over' : ''}>{k(shownKcal)}</strong>
+        <span>kcal</span>
+        {target > 0 && <small>{over ? `${k(eaten + kcal - target)} over` : `${k(target - eaten - kcal)} left after`}</small>}
+      </div>
+    </div>
+  )
+}
+
+/** A described meal split into items: tick, adjust amounts, save new ones, log it all as one entry. */
+function Meal({ name: initialName, initial, eaten, target, date, onDone }: { name: string; initial: MealItem[]; eaten: number; target: number; date: string; onDone: () => void }) {
+  const [name, setName] = useState(initialName)
+  const [items, setItems] = useState(initial)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const totals = mealTotals(items)
+  const on = items.filter((i) => i.on)
+  const set = (key: string, patch: Partial<MealItem>) => { setItems((list) => list.map((i) => (i.key === key ? { ...i, ...patch } : i))); setError('') }
+
+  const submit = async () => {
+    if (!name.trim()) return setError('Give the meal a name.')
+    if (!on.length) return setError('Tick at least one item.')
+    if (on.some((i) => !(i.amount > 0))) return setError('Every ticked item needs an amount above 0.')
+    if (on.some((i) => i.save && !i.name.trim())) return setError('Name the items you want to save.')
+    setBusy(true)
+    for (const i of on) if (i.save && !i.food) await saveFood(toFood(i))
+    const r1 = (n: number) => Math.round(n * 10) / 10
+    await logQuick(date, {
+      name: name.trim(), amount: 1, unit: 'serving', estimate: on.some((i) => i.estimate),
+      kcal: Math.round(totals.kcal), protein: r1(totals.protein), carbs: r1(totals.carbs), fat: r1(totals.fat),
+    })
+    onDone()
+  }
+
+  return (
+    <form className="add-detail" onSubmit={(e) => { e.preventDefault(); submit() }}>
+      <div className="add-hero">
+        <PortionRing kcal={totals.kcal} eaten={eaten} target={target} />
+        <input className="add-name" value={name} onChange={(e) => { setName(e.target.value); setError('') }} placeholder="Meal name" aria-label="Meal name" />
+        <p className="add-per"><span className="tag">{on.length} of {items.length} items</span><span className="tag">logs as one meal</span></p>
+      </div>
+
+      <div className="card add-macros">
+        {MAC.map((m, i) => (
+          <MacroLine key={m.key} index={i} label={m.label} color={m.color} grams={totals[m.key]} total={totals.protein + totals.carbs + totals.fat} />
+        ))}
+      </div>
+
+      <h2 className="add-h">Items <span>tick what you ate, fix amounts</span></h2>
+      <ul className="meal-list">
+        {items.map((i, n) => <MealRow key={i.key} item={i} index={n} onChange={(p) => set(i.key, p)} />)}
+      </ul>
+
+      {error && <p className="warn add-error">{error}</p>}
+      <button type="submit" className="primary add-go" disabled={busy}>Add meal {on.length ? `${k(totals.kcal)} kcal` : ''}</button>
+    </form>
+  )
+}
+
+function MealRow({ item: i, index, onChange }: { item: MealItem; index: number; onChange: (p: Partial<MealItem>) => void }) {
+  const m = itemMacros(i)
+  const noun = servingNoun(i.servingLabel)
+  const units = availableUnits(itemInfo(i)).filter((u): boolean => u !== 'l')
+  const step = STEP[i.unit]
+  const bump = (d: number) => onChange({ amount: Math.max(0, Math.round((i.amount + d) * 100) / 100) })
+  const other = units.find((u) => u !== i.unit)
+  const equiv = other && i.amount > 0 ? convert(i.amount, i.unit, other, itemInfo(i)) : 0
+  return (
+    <li className={`meal-row${i.on ? '' : ' off'}`} style={{ animationDelay: `${0.05 * index}s` }}>
+      <div className="meal-top">
+        <button type="button" className="meal-tick" role="checkbox" aria-checked={i.on} aria-label={`Include ${i.name}`} onClick={() => onChange({ on: !i.on })}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+        </button>
+        <span className="meal-text">
+          {i.food ? <strong>{i.name}</strong> : <input value={i.name} onChange={(e) => onChange({ name: e.target.value })} aria-label="Item name" />}
+          <small>
+            {i.food ? <span className="tag mine">your food</span> : <span className={`tag${i.confidence === 'low' ? ' warn' : ''}`}>{i.confidence}</span>}
+            {i.note || i.servingLabel}
+          </small>
+          <span className="add-ribbon" style={blend(m)} aria-hidden="true" />
+        </span>
+        <span className="add-kcal">{k(m.kcal)}<small>kcal</small></span>
+      </div>
+      {i.on && (
+        <div className="meal-amount">
+          <button type="button" onClick={() => bump(-step)} aria-label="Less" disabled={i.amount <= step}>−</button>
+          <label className="meal-qty">
+            <input type="number" inputMode="decimal" step="any" min="0" value={i.amount || ''} onChange={(e) => onChange({ amount: Number(e.target.value) })} aria-label={`Amount of ${i.name} in ${unitName(i.unit, noun)}`} />
+            {units.length > 1
+              ? <button type="button" className="meal-unit" onClick={() => onChange(cycleUnit(i))} aria-label={`Unit: ${unitName(i.unit, noun)}. Tap to switch`}>{unitName(i.unit, noun, false, i.amount)}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M7 10l5-5 5 5M7 14l5 5 5-5" /></svg></button>
+              : <span className="meal-unit">{unitName(i.unit, noun, false, i.amount)}</span>}
+          </label>
+          <button type="button" onClick={() => bump(step)} aria-label="More">+</button>
+          <span className="meal-equiv">{other && equiv > 0 ? `≈ ${fmtQty(equiv, other)}${other === 'serving' ? ' ' + unitName('serving', noun, false, equiv) : ''}` : ''}</span>
+          {!i.food && (
+            <button type="button" className="meal-save" aria-pressed={i.save} onClick={() => onChange({ save: !i.save })}>{i.save ? 'Will save' : 'Save'}</button>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
 const num = (v: number) => (v ? String(v) : '')
+const round1All = (m: Macros): Macros => ({ kcal: Math.round(m.kcal * 10) / 10, protein: Math.round(m.protein * 10) / 10, carbs: Math.round(m.carbs * 10) / 10, fat: Math.round(m.fat * 10) / 10 })
 type Basis = 'serving' | 'g' | 'ml'
 const BASES: Basis[] = ['serving', 'g', 'ml']
 
@@ -510,7 +636,7 @@ function MacroLine({ index, label, color, grams, total }: { index: number; label
   )
 }
 
-const EXAMPLES = ['Medium koshary from Abou Tarek', '2 slices homemade feteer with honey', 'Chicken shawarma sandwich, Syrian style', 'Plate of molokhia with rice and chicken']
+const EXAMPLES = ['2 fried eggs, baladi bread and tea with milk', 'Medium koshary from Abou Tarek', '2 slices homemade feteer with honey', 'Chicken shawarma sandwich, Syrian style', 'Plate of molokhia with rice and chicken']
 
 /** AI mode: describe a meal in your own words, then Estimate. */
 function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text: string) => void }) {
@@ -523,7 +649,7 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
           <IconAi size={30} />
         </span>
         <h2>Describe your meal</h2>
-        <p className="muted">Say what and how much. AI leans high to keep you safe.</p>
+        <p className="muted">Say what and how much. A whole meal is fine, AI splits it into items.</p>
       </div>
       <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Medium koshary from Abou Tarek" aria-label="Describe your meal" />
       <div className="add-examples">
