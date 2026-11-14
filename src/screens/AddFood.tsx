@@ -5,9 +5,9 @@ import { db } from '../db/db'
 import { deleteEntry, logFood, logQuick, saveFood } from '../db/repo'
 import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
-import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type MealItem } from '../logic/meal'
+import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type AiMeal, type MealItem } from '../logic/meal'
 import { formatDay } from '../logic/dates'
-import { askAi, askMeal, photoToBase64 } from '../logic/ai'
+import { askMeal, askPhoto, photoToBase64, type AiFood, type PhotoEvent, type PhotoKind } from '../logic/ai'
 import { searchByName } from '../logic/search'
 import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
@@ -42,7 +42,18 @@ interface Draft extends Macros {
   initialUnit?: AmountUnit
 }
 
-type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string; photo?: string } | { kind: 'detail'; draft: Draft } | { kind: 'meal'; name: string; items: MealItem[] }
+/** Live state of a photo being analysed: how many steps are done and what the AI has said so far. */
+interface PhotoRun {
+  kind: 'photo'
+  photo: string
+  done: number
+  found?: PhotoKind
+  seen?: string
+  items: { name: string; kcal?: number }[]
+  retried?: boolean
+}
+
+type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string } | PhotoRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft } | { kind: 'meal'; name: string; items: MealItem[] }
 
 export function AddFood({ date, today, onClose }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
@@ -64,6 +75,10 @@ export function AddFood({ date, today, onClose }: Props) {
   const [toast, setToast] = useState<{ text: string; entryId: number } | null>(null)
   const [done, setDone] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  // The photo being analysed: kept while its screens show it, freed when a new one comes or the page closes.
+  const photoUrl = useRef('')
+  const run = useRef(0)
+  useEffect(() => () => { if (photoUrl.current) URL.revokeObjectURL(photoUrl.current) }, [])
 
   // Each view starts at the top (the edit form otherwise opens where the detail was scrolled to).
   useEffect(() => { window.scrollTo(0, 0) }, [view.kind])
@@ -95,59 +110,82 @@ export function AddFood({ date, today, onClose }: Props) {
     setToast({ text: `${f.name} added`, entryId: id })
   }
 
-  const runAi = async (label: string, req: Parameters<typeof askAi>[0], photo?: string) => {
-    setError('')
-    setView({ kind: 'busy', label, photo })
-    try {
-      const f = await askAi(req)
-      setView({
-        kind: 'detail',
-        draft: { source: req.mode === 'label' ? 'label' : 'ai', name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel, amount: f.defaultAmount, estimate: req.mode === 'text', confidence: f.confidence, note: f.note, gramsPerServing: f.gramsPerServing, liquid: f.liquid, kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat },
-      })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong.')
-      setView({ kind: 'home' })
-    }
-  }
+  const showAiFood = (f: AiFood, source: 'ai' | 'label') => setView({
+    kind: 'detail',
+    draft: { source, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel, amount: f.defaultAmount, estimate: source === 'ai', confidence: f.confidence, note: f.note, gramsPerServing: f.gramsPerServing, liquid: f.liquid, kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat },
+  })
 
   // Described food or meal: the AI splits it into items. One item opens the normal detail; more open the meal list.
   const runMeal = async (text: string) => {
     setError('')
     setView({ kind: 'busy', label: 'Estimating…' })
     try {
-      const meal = await askMeal(text, foodsContext(foods))
-      const items = buildItems(meal, foods)
-      if (items.length === 1) {
-        const i = items[0]
-        if (i.food) {
-          const f = i.food
-          setView({ kind: 'detail', draft: { source: 'saved', food: f, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel ?? fmtAmount(f.baseAmount, f.unit), amount: i.amount, initialUnit: i.unit, estimate: f.estimate, ...labelGrams(f), kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat } })
-        } else {
-          // Countable (egg, banana): numbers per piece so the page says "eggs"; otherwise per the weight eaten.
-          const perPiece = i.baseUnit !== 'serving' && i.gramsPerServing
-          const base = perPiece ? round1All(scaleFood({ ...i.base, baseAmount: i.baseAmount }, i.gramsPerServing!)) : i.base
-          setView({ kind: 'detail', draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: true, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, ...base } })
-        }
-        return
-      }
-      setView({ kind: 'meal', name: meal.name, items })
+      showMeal(await askMeal(text, foodsContext(foods)))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong.')
       setView({ kind: 'home' })
     }
   }
 
+  const showMeal = (meal: AiMeal) => {
+    const items = buildItems(meal, foods)
+    if (items.length === 1) {
+      const i = items[0]
+      if (i.food) {
+        const f = i.food
+        setView({ kind: 'detail', draft: { source: 'saved', food: f, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel ?? fmtAmount(f.baseAmount, f.unit), amount: i.amount, initialUnit: i.unit, estimate: f.estimate, ...labelGrams(f), kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat } })
+      } else {
+        // Countable (egg, banana): numbers per piece so the page says "eggs"; otherwise per the weight eaten.
+        const perPiece = i.baseUnit !== 'serving' && i.gramsPerServing
+        const base = perPiece ? round1All(scaleFood({ ...i.base, baseAmount: i.baseAmount }, i.gramsPerServing!)) : i.base
+        setView({ kind: 'detail', draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: true, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, ...base } })
+      }
+      return
+    }
+    setView({ kind: 'meal', name: meal.name, items })
+  }
+
+  // Any photo: the AI decides label / food / nothing, and each step it reports updates the screen as it happens.
   const onPhoto = async (file?: File) => {
     if (!file) return
-    const photo = URL.createObjectURL(file)
+    if (photoUrl.current) URL.revokeObjectURL(photoUrl.current)
+    const photo = (photoUrl.current = URL.createObjectURL(file))
+    const id = ++run.current
+    const live = () => run.current === id
+    const step = (f: (r: PhotoRun) => PhotoRun) => { if (live()) setView((v) => (v.kind === 'photo' ? f(v) : v)) }
+    setError('')
+    setView({ kind: 'photo', photo, done: 0, items: [] })
+    let img
     try {
-      const img = await photoToBase64(file)
-      await runAi('Reading label…', { mode: 'label', ...img }, photo)
+      img = await photoToBase64(file)
     } catch {
-      setError('Could not read that photo. Try another one.')
+      if (live()) { setError('Could not open that photo. Try another one.'); setView({ kind: 'home' }) }
+      return
+    }
+    step((r) => ({ ...r, done: 1 }))
+    const onEvent = (e: PhotoEvent) => step((r) => {
+      if (e.t === 'start') return { ...r, done: Math.max(r.done, 2) }
+      if (e.t === 'retry') return { ...r, done: 2, found: undefined, seen: undefined, items: [], retried: true }
+      if (e.t === 'kind') return { ...r, done: 3, found: e.kind }
+      if (e.t === 'seen') return { ...r, seen: e.text }
+      const items = [...r.items]
+      items[e.i] = { name: e.name, kcal: e.kcal ?? items[e.i]?.kcal }
+      return { ...r, items }
+    })
+    try {
+      const res = await askPhoto(img, foodsContext(foods), onEvent)
+      if (!live()) return
+      // Let the last tick and chip land before moving on.
+      step((r) => ({ ...r, done: 4 }))
+      await new Promise((ok) => setTimeout(ok, 450))
+      if (!live()) return
+      if (res.kind === 'label') showAiFood(res.food, 'label')
+      else if (res.kind === 'food') showMeal(res.meal)
+      else setView({ kind: 'nofood', photo, note: res.note })
+    } catch (e) {
+      if (!live()) return
+      setError(e instanceof Error ? e.message : 'Something went wrong.')
       setView({ kind: 'home' })
-    } finally {
-      URL.revokeObjectURL(photo)
     }
   }
 
@@ -161,7 +199,11 @@ export function AddFood({ date, today, onClose }: Props) {
     window.setTimeout(onClose, 650)
   }
 
-  const back = () => (view.kind === 'home' ? onClose() : setView({ kind: 'home' }))
+  const back = () => {
+    run.current++ // a photo still being analysed is dropped
+    if (view.kind === 'home') onClose()
+    else setView({ kind: 'home' })
+  }
 
   return (
     <div className={`addpage${view.kind === 'detail' || view.kind === 'meal' ? ' docked' : ''}`} role="dialog" aria-label="Add food">
@@ -187,7 +229,7 @@ export function AddFood({ date, today, onClose }: Props) {
               onChange={(e) => { setQuery(e.target.value); setError('') }}
               aria-label="What did you eat?"
             />
-            <button className="add-tool cam" onClick={() => fileRef.current?.click()} aria-label="Scan a nutrition label">
+            <button className="add-tool cam" onClick={() => fileRef.current?.click()} aria-label="Photo of food or a nutrition label">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.5" /></svg>
             </button>
             <button className="add-tool ai" onClick={() => setView({ kind: 'describe' })} aria-label="Describe your meal for AI">
@@ -254,9 +296,22 @@ export function AddFood({ date, today, onClose }: Props) {
 
       {view.kind === 'busy' && (
         <div className="add-busy">
-          {view.photo && <img src={view.photo} alt="" className="add-photo" />}
           <div className="add-progress"><span /></div>
           <p>{view.label}</p>
+        </div>
+      )}
+
+      {view.kind === 'photo' && <PhotoProgress run={view} />}
+
+      {view.kind === 'nofood' && (
+        <div className="add-busy add-nofood">
+          <img src={view.photo} alt="" className="add-photo" />
+          <h2>No food found</h2>
+          <p>{view.note}</p>
+          <div className="add-nofood-go">
+            <button className="primary" onClick={() => fileRef.current?.click()}>Retake photo</button>
+            <button className="link" onClick={() => setView({ kind: 'describe' })}>Type it instead</button>
+          </div>
         </div>
       )}
 
@@ -280,6 +335,47 @@ export function AddFood({ date, today, onClose }: Props) {
           <span><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
           <p>Added</p>
         </div>
+      )}
+    </div>
+  )
+}
+
+/** The photo being analysed, with real steps ticking off as the AI reports them and the items it finds popping in. */
+function PhotoProgress({ run }: { run: PhotoRun }) {
+  const { done, found, seen, items } = run
+  const look = found === 'label' ? 'Nutrition label found' : found === 'none' ? 'No food spotted' : seen ? `Spotted: ${seen}` : 'Food found'
+  const steps: [string, string][] = [
+    ['Preparing photo', 'Photo ready'],
+    ['Sending to AI', 'Sent to AI'],
+    ['Looking at the photo', look],
+    found === 'label' ? ['Reading the numbers', 'Numbers read'] : found === 'none' ? ['Double-checking', 'Checked'] : ['Working out portions and macros', 'Macros worked out'],
+  ]
+  return (
+    <div className="add-busy add-scan" aria-live="polite">
+      <div className={`add-shot${done >= 4 ? ' done' : ''}`}>
+        <img src={run.photo} alt="" className="add-photo" />
+        <span className="add-sweep" aria-hidden="true" />
+      </div>
+      <ol className="add-steps">
+        {steps.map(([doing, did], i) => {
+          const state = i < done ? 'did' : i === done ? 'doing' : 'todo'
+          return (
+            <li key={i} className={state}>
+              <span className="add-step-dot" aria-hidden="true">
+                {state === 'did' && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
+              </span>
+              <span key={state === 'did' ? did : doing} className="add-step-text">{state === 'did' ? did : doing}</span>
+            </li>
+          )
+        })}
+      </ol>
+      {run.retried && done < 3 && <p className="add-retry">First AI was busy, asking another</p>}
+      {items.length > 0 && (
+        <ul className="add-found">
+          {items.map((it, i) => it && (
+            <li key={i}>{it.name}{it.kcal !== undefined && <b>{k(it.kcal)} kcal</b>}</li>
+          ))}
+        </ul>
       )}
     </div>
   )

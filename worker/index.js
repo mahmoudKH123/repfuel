@@ -2,7 +2,9 @@
 // Holds the Gemini key so it never reaches the browser. Two jobs:
 //   POST { mode: "text",  text }               -> estimate for one described food (kept for older app versions)
 //   POST { mode: "meal",  text, foods }        -> the meal split into items; `foods` = the user's saved foods, one per line
-//   POST { mode: "label", image, mimeType }    -> exact values read from a nutrition-facts photo
+//   POST { mode: "label", image, mimeType }    -> exact values read from a nutrition-facts photo (kept for older app versions)
+//   POST { mode: "photo", image, mimeType, foods } -> STREAMED (text/event-stream): the AI decides if the photo is a label,
+//        food, or neither, and the app sees each step live. Events: start, kind, seen, item, retry, done, error (see photoStream).
 // Reply: { food: {...}, model } for text/label, { meal: { name, note, items: [...] }, model } for meal
 
 const RULES_TEXT = `You estimate calories and macros for foods eaten by a gym-goer in Egypt.
@@ -58,6 +60,65 @@ const LABEL_SCHEMA = {
     note: { type: 'STRING' },
   },
   required: ['name', 'basis', 'kcal', 'protein', 'carbs', 'fat', 'confidence', 'note'],
+}
+
+const RULES_PHOTO = `Look at this photo from a gym-goer in Egypt who wants to log what they ate.
+First decide what it shows:
+- kind "label": a nutrition facts panel (English and/or Arabic). Fill "label" and leave items empty.
+- kind "food": food or drink (a fruit, a plate, a meal, a packaged product without a readable label). Fill mealName and items, label = null.
+- kind "none": no food, drink or nutrition label (or too blurry to tell). label = null, items empty, explain in note.
+seen: what is in the photo in a few plain words, e.g. "A banana", "Koshary with a Pepsi", "Nutrition label, Juhayna yogurt".
+For a label:
+- Copy the numbers EXACTLY as printed. Do not pad or round them.
+- Prefer the "per 100 g" (or per 100 ml) column. If only "per serving" exists, convert to per 100 g using the serving size in grams; if the serving size in grams is unknown, return values per serving instead.
+- kcal: use kcal, not kJ. If only kJ is printed, divide by 4.184. "Carbohydrate" means total carbs.
+- servingGrams: the serving size in g or ml if printed, else null. name: the product name if visible, else a short description.
+- confidence: "high" if the label is clear, "medium" if some numbers were hard to read, "low" if guessed.
+For food:
+- Split it into the separate things you can see (a banana = 1 item; chicken, rice and salad = 3 items; a sandwich or a plate of koshary = 1 item).
+- Judge each portion from the photo (plate size, pieces you can count). Be realistic, not padded; assume normal Egyptian portions.
+- Home cooking and restaurant food: include the cooking oil, butter, ghee or sauce it is normally made with.
+- The user's saved foods are listed below as "#id | name | numbers per amount". If an item clearly IS one of them, set matchId to that id and amount to how much is shown in that food's unit (grams for "per 100 g", ml for "per 100 ml", servings for "per 1 serving"). Otherwise matchId = 0 and amount = 0.
+- eatenGrams = the TOTAL weight shown in grams (TOTAL ml for drinks); kcal/protein/carbs/fat for that WHOLE amount.
+- servingLabel is always "1 <thing>" (e.g. "1 banana", "1 medium plate") and gramsPerServing = the weight of ONE such unit, or 0 if not countable.
+- statedWeight: false. liquid: true for drinks and soups. name: short, clear, in English. mealName: a short name for the whole meal.
+- confidence per item: "high" for branded/known items, "medium" for typical dishes, "low" if hard to see. note per item: one short line on what you assumed, or "".`
+
+const PHOTO_ITEM = {
+  type: 'OBJECT',
+  properties: {
+    name: { type: 'STRING' },
+    kcal: { type: 'NUMBER' },
+    eatenGrams: { type: 'NUMBER' },
+    matchId: { type: 'INTEGER' },
+    amount: { type: 'NUMBER' },
+    servingLabel: { type: 'STRING' },
+    gramsPerServing: { type: 'NUMBER' },
+    liquid: { type: 'BOOLEAN' },
+    statedWeight: { type: 'BOOLEAN' },
+    protein: { type: 'NUMBER' },
+    carbs: { type: 'NUMBER' },
+    fat: { type: 'NUMBER' },
+    confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] },
+    note: { type: 'STRING' },
+  },
+  required: ['name', 'kcal', 'eatenGrams', 'matchId', 'amount', 'servingLabel', 'gramsPerServing', 'liquid', 'statedWeight', 'protein', 'carbs', 'fat', 'confidence', 'note'],
+  propertyOrdering: ['name', 'kcal', 'eatenGrams', 'matchId', 'amount', 'servingLabel', 'gramsPerServing', 'liquid', 'statedWeight', 'protein', 'carbs', 'fat', 'confidence', 'note'],
+}
+
+// Field order matters: kind and seen come first so the app can show them while the rest is still being written.
+const PHOTO_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    kind: { type: 'STRING', enum: ['label', 'food', 'none'] },
+    seen: { type: 'STRING' },
+    label: { ...LABEL_SCHEMA, nullable: true, propertyOrdering: ['name', 'basis', 'servingGrams', 'kcal', 'protein', 'carbs', 'fat', 'confidence', 'note'] },
+    mealName: { type: 'STRING' },
+    items: { type: 'ARRAY', items: PHOTO_ITEM },
+    note: { type: 'STRING' },
+  },
+  required: ['kind', 'seen', 'mealName', 'items', 'note'],
+  propertyOrdering: ['kind', 'seen', 'label', 'mealName', 'items', 'note'],
 }
 
 const TEXT_SCHEMA = {
@@ -140,6 +201,15 @@ export default {
 
     let body
     try { body = await request.json() } catch { return reply(400, { error: 'Bad request.' }) }
+
+    if (body.mode === 'photo' && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64) {
+      const foods = typeof body.foods === 'string' ? body.foods.slice(0, MAX_FOODS_TEXT) : ''
+      const payload = {
+        contents: [{ parts: [{ text: `${RULES_PHOTO}\n\nSaved foods:\n${foods || '(none)'}` }, { inline_data: { mime_type: body.mimeType || 'image/jpeg', data: body.image } }] }],
+        generationConfig: { responseMimeType: 'application/json', responseSchema: PHOTO_SCHEMA, ...THINKING },
+      }
+      return photoStream(payload, env, { ...cors, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+    }
 
     let payload
     if (body.mode === 'text' && typeof body.text === 'string' && body.text.trim()) {
@@ -242,6 +312,150 @@ function fromLabel(r) {
     kcal: num(r.kcal), protein: num(r.protein), carbs: num(r.carbs), fat: num(r.fat),
     confidence: conf(r.confidence),
     note: String(r.note ?? '').slice(0, 200),
+  }
+}
+
+/**
+ * Photo mode: streams Gemini's answer and turns it into small progress events for the app, as SSE lines `data: {...}`.
+ *   start              the photo reached the Worker and the AI is looking at it
+ *   kind  {kind}       label | food | none, as soon as the AI has decided
+ *   seen  {text}       what it sees, in a few words
+ *   item  {i,name,kcal?} each item (or the label's product) as its name, then its kcal, are written
+ *   retry              the model failed part way; the next model starts over (the app clears items)
+ *   done  {kind, food | meal | note}   the final answer, same shapes as the label and meal modes
+ *   error {error}
+ */
+function photoStream(payload, env, headers) {
+  const { readable, writable } = new TransformStream()
+  const out = writable.getWriter()
+  const enc = new TextEncoder()
+  const send = (e) => out.write(enc.encode(`data: ${JSON.stringify(e)}\n\n`))
+  ;(async () => {
+    let lastStatus = 0
+    const deadline = Date.now() + TOTAL_BUDGET_MS
+    try {
+      await send({ t: 'start' })
+      let tried = false
+      for (const model of env.MODELS.split(',').map((m) => m.trim())) {
+        const left = deadline - Date.now()
+        if (left < 4_000) break
+        if (tried) await send({ t: 'retry' })
+        tried = true
+        const t0 = Date.now()
+        const r = await streamModel(model, payload, env.GEMINI_API_KEY, Math.min(MODEL_TIMEOUT_MS, left), deadline, send)
+        console.log(JSON.stringify({ mode: 'photo', model, status: r.status, ms: Date.now() - t0, error: r.error }))
+        lastStatus = r.status
+        if (r.status === 429 || r.status === 404 || r.status >= 500) continue
+        if (r.status !== 200) return await send({ t: 'error', error: `AI error (${r.status}).` })
+        const raw = parseJson(r.text)
+        if (!raw) return await send({ t: 'error', error: 'AI gave an unreadable answer. Try again.' })
+        return await send(fromPhoto(raw))
+      }
+      await send({ t: 'error', error: lastStatus === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.' })
+    } catch {
+      await send({ t: 'error', error: 'AI is unavailable right now. Try again later.' }).catch(() => {})
+    } finally {
+      await out.close().catch(() => {})
+    }
+  })()
+  return new Response(readable, { status: 200, headers })
+}
+
+function fromPhoto(r) {
+  const kind = ['label', 'food', 'none'].includes(r.kind) ? r.kind : 'none'
+  const note = String(r.note ?? '').slice(0, 200)
+  if (kind === 'label' && r.label) return { t: 'done', kind, food: fromLabel(r.label) }
+  if (kind === 'food') {
+    const meal = fromMeal(r)
+    if (meal.items.length) return { t: 'done', kind, meal }
+  }
+  return { t: 'done', kind: 'none', note: note || 'No food or nutrition label found in this photo.' }
+}
+
+const JSON_STR = '"((?:[^"\\\\]|\\\\.)*)"'
+const strField = (src, key) => {
+  const m = new RegExp(`"${key}"\\s*:\\s*${JSON_STR}`).exec(src)
+  if (!m) return undefined
+  try { return JSON.parse(`"${m[1]}"`) } catch { return m[1] }
+}
+
+/** Reads the half-written JSON so far and sends only what is new since last time. */
+function makeWatcher(send) {
+  const sent = { kind: '', seen: '', names: [], kcals: [] }
+  return async (text) => {
+    if (!sent.kind) {
+      const m = /"kind"\s*:\s*"(label|food|none)"/.exec(text)
+      if (m) { sent.kind = m[1]; await send({ t: 'kind', kind: m[1] }) }
+    }
+    if (!sent.seen) {
+      const v = strField(text, 'seen')
+      if (v) { sent.seen = v; await send({ t: 'seen', text: v.slice(0, 80) }) }
+    }
+    // Items: each starts at a "name" key inside "items" (or inside "label" for a product name).
+    const at = text.indexOf(sent.kind === 'label' ? '"label"' : '"items"')
+    if (at < 0) return
+    const parts = text.slice(at).split(/(?="name"\s*:)/).slice(1)
+    for (let i = 0; i < parts.length && i < 15; i++) {
+      const name = strField(parts[i], 'name')
+      if (!name) break
+      if (sent.names[i] === undefined) { sent.names[i] = name; await send({ t: 'item', i, name: name.slice(0, 40) }) }
+      const k = /"kcal"\s*:\s*(\d+(?:\.\d+)?)\s*[,}]/.exec(parts[i])
+      if (k && sent.kcals[i] === undefined) { sent.kcals[i] = Number(k[1]); await send({ t: 'item', i, name: name.slice(0, 40), kcal: Math.round(Number(k[1])) }) }
+    }
+  }
+}
+
+/**
+ * One streamed Gemini call. `firstMs` = time allowed until the first piece arrives; the whole call must end by `deadline`.
+ * Returns { status, text } or { status, error }.
+ */
+async function streamModel(model, payload, key, firstMs, deadline, send) {
+  const ctrl = new AbortController()
+  let timer = setTimeout(() => ctrl.abort(), firstMs)
+  const watch = makeWatcher(send)
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      return { status: res.status, error: String(data.error?.message ?? '').slice(0, 300) }
+    }
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    let text = ''
+    let first = true
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      if (first) {
+        // Something arrived: from now on only the overall deadline applies.
+        first = false
+        clearTimeout(timer)
+        timer = setTimeout(() => ctrl.abort(), Math.max(1_000, deadline - Date.now()))
+      }
+      buf += dec.decode(value, { stream: true })
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim()
+        buf = buf.slice(nl + 1)
+        if (!line.startsWith('data:')) continue
+        let chunk
+        try { chunk = JSON.parse(line.slice(5)) } catch { continue }
+        const parts = chunk.candidates?.[0]?.content?.parts ?? []
+        text += parts.filter((p) => !p.thought).map((p) => p.text ?? '').join('')
+        await watch(text)
+      }
+    }
+    return text ? { status: 200, text } : { status: 502, error: 'empty stream' }
+  } catch {
+    return { status: 504, error: 'network or timeout' }
+  } finally {
+    clearTimeout(timer)
   }
 }
 

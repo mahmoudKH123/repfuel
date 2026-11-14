@@ -32,8 +32,6 @@ export function setPass(v: string): void {
 const isMock = () => !AI_URL && import.meta.env.DEV
 
 type AiRequest =
-  | { mode: 'text'; text: string }
-  | { mode: 'label'; image: string; mimeType: string }
   | { mode: 'meal'; text: string; foods: string }
 
 async function post(req: AiRequest): Promise<Record<string, unknown>> {
@@ -57,13 +55,6 @@ async function post(req: AiRequest): Promise<Record<string, unknown>> {
   return data
 }
 
-export async function askAi(req: { mode: 'text'; text: string } | { mode: 'label'; image: string; mimeType: string }): Promise<AiFood> {
-  if (isMock()) return mock(req.mode)
-  const data = await post(req)
-  if (!data.food) throw new Error('AI gave an unreadable answer. Try again.')
-  return data.food as AiFood
-}
-
 /** Splits a described meal into items. `foods` = your saved foods (see foodsContext) so matches use your numbers. */
 export async function askMeal(text: string, foods: string): Promise<AiMeal> {
   if (isMock()) return mockMeal(text)
@@ -71,6 +62,72 @@ export async function askMeal(text: string, foods: string): Promise<AiMeal> {
   const meal = data.meal as AiMeal | undefined
   if (!meal?.items?.length) throw new Error('AI found no food in that. Try describing it differently.')
   return meal
+}
+
+export type PhotoKind = 'label' | 'food' | 'none'
+
+/** Live steps while the AI looks at a photo (streamed from the Worker). */
+export type PhotoEvent =
+  | { t: 'start' }
+  | { t: 'kind'; kind: PhotoKind }
+  | { t: 'seen'; text: string }
+  | { t: 'item'; i: number; name: string; kcal?: number }
+  | { t: 'retry' }
+
+export type PhotoResult = { kind: 'label'; food: AiFood } | { kind: 'food'; meal: AiMeal } | { kind: 'none'; note: string }
+
+/** Any photo: the AI decides if it is a nutrition label, food, or neither, and reports each step as it goes. */
+export async function askPhoto(img: { image: string; mimeType: string }, foods: string, onEvent: (e: PhotoEvent) => void): Promise<PhotoResult> {
+  if (isMock()) return mockPhoto(onEvent)
+  if (!AI_URL) throw new Error('AI is not set up yet.')
+  const pass = getPass()
+  if (!pass) throw new Error('Enter your AI passcode in Settings → AI first.')
+  let res: Response
+  try {
+    res = await fetch(AI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-RepFuel-Pass': pass },
+      body: JSON.stringify({ mode: 'photo', ...img, foods }),
+      signal: AbortSignal.timeout(60_000),
+    })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('AI took too long. Try again, or add it by hand.')
+    throw new Error('Could not reach the AI. You may be offline. Check your internet and try again.')
+  }
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error ?? `AI error (${res.status}).`)
+  }
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buf += dec.decode(value, { stream: true })
+      let cut
+      while ((cut = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, cut).trim()
+        buf = buf.slice(cut + 2)
+        if (!line.startsWith('data:')) continue
+        let e: Record<string, unknown>
+        try { e = JSON.parse(line.slice(5)) } catch { continue }
+        if (e.t === 'error') throw new Error(String(e.error ?? 'AI error.'))
+        if (e.t === 'done') {
+          if (e.kind === 'label' && e.food) return { kind: 'label', food: e.food as AiFood }
+          if (e.kind === 'food' && (e.meal as AiMeal | undefined)?.items?.length) return { kind: 'food', meal: e.meal as AiMeal }
+          return { kind: 'none', note: String(e.note ?? 'No food or nutrition label found in this photo.') }
+        }
+        onEvent(e as PhotoEvent)
+      }
+    }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('AI took too long. Try again, or add it by hand.')
+    if (e instanceof Error && e.message) throw e
+    throw new Error('Lost the connection to the AI. Try again.')
+  }
+  throw new Error('Lost the connection to the AI. Try again.')
 }
 
 /** Shrinks a photo to max 1280px JPEG and returns base64 (no data: prefix). Keeps uploads small and fast. */
@@ -86,13 +143,6 @@ export async function photoToBase64(file: File): Promise<{ image: string; mimeTy
   return { image: url.slice(url.indexOf(',') + 1), mimeType: 'image/jpeg' }
 }
 
-async function mock(mode: 'text' | 'label'): Promise<AiFood> {
-  await new Promise((r) => setTimeout(r, 900))
-  return mode === 'label'
-    ? { name: 'Juhayna Greek Yogurt (dev sample)', baseAmount: 100, unit: 'g', servingLabel: '100 g', defaultAmount: 170, gramsPerServing: 170, kcal: 97, protein: 9, carbs: 4, fat: 5, confidence: 'high', note: 'Read per 100 g column. Serving is 170 g.' }
-    : { name: 'Koshary, medium (dev sample)', baseAmount: 1, unit: 'serving', servingLabel: '1 medium plate', defaultAmount: 1, gramsPerServing: 450, kcal: 905, protein: 26, carbs: 150, fat: 24, confidence: 'medium', note: 'Assumed fried onions and oil in sauce. Leaned high.' }
-}
-
 async function mockMeal(text: string): Promise<AiMeal> {
   await new Promise((r) => setTimeout(r, 900))
   const base = { matchId: 0, amount: 0, liquid: false, confidence: 'medium' as const, note: '' }
@@ -105,4 +155,20 @@ async function mockMeal(text: string): Promise<AiMeal> {
       { ...base, name: 'Tea with milk and sugar', eatenGrams: 250, servingLabel: '1 glass', gramsPerServing: 250, liquid: true, kcal: 70, protein: 2, carbs: 12, fat: 2, note: '2 tsp sugar.' },
     ],
   }
+}
+
+async function mockPhoto(on: (e: PhotoEvent) => void): Promise<PhotoResult> {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  on({ t: 'start' }); await wait(1200)
+  on({ t: 'kind', kind: 'food' }); await wait(300)
+  on({ t: 'seen', text: 'A banana and a glass of milk (dev sample)' }); await wait(500)
+  on({ t: 'item', i: 0, name: 'Banana' }); await wait(400)
+  on({ t: 'item', i: 0, name: 'Banana', kcal: 105 }); await wait(400)
+  on({ t: 'item', i: 1, name: 'Milk' }); await wait(400)
+  on({ t: 'item', i: 1, name: 'Milk', kcal: 150 }); await wait(500)
+  const base = { matchId: 0, amount: 0, statedWeight: false, confidence: 'medium' as const, note: '' }
+  return { kind: 'food', meal: { name: 'Snack (dev sample)', items: [
+    { ...base, name: 'Banana', eatenGrams: 120, servingLabel: '1 banana', gramsPerServing: 120, liquid: false, kcal: 105, protein: 1.3, carbs: 27, fat: 0.4 },
+    { ...base, name: 'Milk', eatenGrams: 250, servingLabel: '1 glass', gramsPerServing: 250, liquid: true, kcal: 150, protein: 8, carbs: 12, fat: 8 },
+  ] } }
 }
