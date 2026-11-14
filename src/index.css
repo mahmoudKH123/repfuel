@@ -328,13 +328,14 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 .td-left.over { color: var(--fat); }
 .td-left .odo { color: var(--c); font-weight: 700; }
 .td-left.over .odo { color: var(--fat); }
-.odo { display: inline-flex; vertical-align: bottom; font-family: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif; }
-.odo-wheel { display: inline-block; height: 1.25em; overflow: hidden; -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
-.odo-wheel > span { display: flex; flex-direction: column; transition: transform 1s cubic-bezier(0.34, 1.32, 0.5, 1); }
+.odo { display: inline-flex; vertical-align: bottom; font-family: ui-rounded, 'SF Pro Rounded', -apple-system, sans-serif; -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); }
+/* One fade on the whole number (not per wheel) and a GPU layer per strip, so the roll never forces a redraw. */
+.odo-wheel { display: inline-block; height: 1.25em; overflow: hidden; }
+.odo-wheel > span { display: flex; flex-direction: column; will-change: transform; transition: transform 0.8s cubic-bezier(0.3, 1.15, 0.45, 1); }
 .odo-wheel i { font-style: normal; height: 1.25em; text-align: center; }
 .td-left-hit { display: inline-flex; align-items: center; gap: 5px; color: var(--c); animation: pop 0.45s var(--ease) both; }
 .td-left-hit svg { stroke-dasharray: 24; stroke-dashoffset: 24; animation: draw 0.4s 0.15s var(--ease) forwards; }
-@media (prefers-reduced-motion: reduce) { .odo-wheel > span { transition: none; } .odo-wheel { -webkit-mask-image: none; mask-image: none; } }
+@media (prefers-reduced-motion: reduce) { .odo-wheel > span { transition: none; } .odo { -webkit-mask-image: none; mask-image: none; } }
 .td-warn { margin: 14px 0 0; font-size: 13px; font-weight: 600; color: var(--fat); }
 
 .td-week { margin-top: 28px; padding-top: 18px; border-top: 0.5px solid var(--line); }
@@ -487,10 +488,77 @@ body:has(.add-done) .add-dock { opacity: 0; transition: opacity 0.15s ease; poin
   padding: 11px 16px 11px 14px; background: none; border-radius: 0; box-shadow: none; color: var(--text);
 }
 .add-card > button:active { background: var(--card2); transform: none; opacity: 1; }
-.add-mini { flex: none; transform: rotate(-90deg); }
+.add-mini { transform: rotate(-90deg); transform-origin: 19px 19px; }
 .add-mini circle { fill: none; stroke-width: 4; }
 .add-mini .wk-ring-track { stroke: var(--track); }
-.add-mini .wk-ring-arc { stroke: var(--kcal); stroke-linecap: round; }
+.add-mini .wk-ring-arc { stroke: var(--kcal); stroke-linecap: round; transition: stroke-dasharray 0.45s var(--ease); }
+/* Ring = plate toggle. Picked: the arc closes into a full circle, fills green and a tick draws in. */
+.add-card > .add-pick { position: absolute; left: 4px; top: 0; bottom: 0; z-index: 2; width: 54px; padding: 0; display: grid; place-items: center; background: none; box-shadow: none; border-radius: 0; color: inherit; }
+.add-card > .add-pick[aria-pressed] { background: none; color: inherit; }
+.add-card > .add-pick:active { transform: none; opacity: 1; }
+.add-card > .add-pick:active svg { transform: scale(0.86); }
+.add-pick svg { transition: transform 0.25s var(--ease); overflow: visible; }
+.add-pick-fill { fill: var(--kcal); transform-origin: 19px 19px; transform: scale(0); transition: transform 0.35s cubic-bezier(0.34, 1.5, 0.6, 1) 0.12s; }
+.add-pick-tick { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 20; stroke-dashoffset: 20; transition: stroke-dashoffset 0.25s var(--ease); }
+.add-card.picked .add-pick-fill { transform: scale(1); }
+.add-card.picked .add-pick-tick { stroke-dashoffset: 0; transition-delay: 0.3s; }
+.add-card.picked > button:not(.add-pick) { background: color-mix(in srgb, var(--kcal) 8%, transparent); }
+.add-card > button:not(.add-pick) { padding-left: 64px; transition: background-color 0.3s ease; }
+.addpage.plated { padding-bottom: calc(env(safe-area-inset-bottom) + 140px); }
+
+/* The plate: a floating card at the bottom while foods are picked. */
+.plate-dock { padding-top: 0; animation: plateIn 0.45s cubic-bezier(0.34, 1.3, 0.6, 1) both; }
+.plate-dock.leaving { animation: plateOut 0.3s var(--ease) both; }
+.plate { padding: 10px 10px 12px; border-radius: 24px; background: var(--solid); box-shadow: 0 10px 34px rgba(0, 0, 0, 0.16), 0 0 0 0.5px var(--line); }
+.plate-bar { display: flex; align-items: center; gap: 10px; }
+.plate-sum { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 4px 6px; background: none; box-shadow: none; text-align: left; color: var(--text); }
+.plate-sum:active { transform: none; opacity: 0.7; }
+.plate-count { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--kcal) 16%, transparent); color: var(--kcal); font-size: 18px; font-weight: 800; }
+.plate-count .odo { line-height: 1.25; }
+.plate-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.plate-text b { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plate-text small { font-size: 12px; font-weight: 600; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plate-chev { flex: none; color: var(--text2); transition: transform 0.35s var(--ease); }
+.plate-sum[aria-expanded='true'] .plate-chev { transform: rotate(180deg); }
+.plate-go { flex: none; min-width: 104px; padding: 14px 18px; border-radius: 16px; font-size: 16px; font-weight: 700; box-shadow: 0 6px 18px color-mix(in srgb, var(--kcal) 30%, transparent); transition: min-width 0.3s var(--ease); }
+.plate-go span { display: inline-flex; align-items: center; justify-content: center; gap: 6px; animation: fadeIn 0.25s var(--ease) both; }
+.plate-ok svg { stroke-dasharray: 24; stroke-dashoffset: 24; animation: draw 0.35s 0.05s var(--ease) forwards; }
+.plate-dock.adding .plate-go { opacity: 0.7; }
+.plate-fuel { position: relative; height: 5px; margin: 10px 6px 0; border-radius: 3px; background: var(--track); overflow: hidden; }
+.plate-fuel span { position: absolute; top: 0; bottom: 0; border-radius: 3px; transition: left 0.6s var(--ease), width 0.6s var(--ease) 0.4s; }
+.plate-fuel-now { left: 0; background: color-mix(in srgb, var(--text) 30%, transparent); }
+.plate-fuel-add { background: var(--kcal); }
+.plate-fuel.over .plate-fuel-add { background: var(--fat); }
+/* Once added, the green part sweeps into the grey: it's now eaten. */
+.plate-dock.added .plate-fuel-add, .plate-dock.leaving .plate-fuel-add { background: color-mix(in srgb, var(--text) 30%, transparent); transition: background-color 0.5s ease; }
+/* Review list opens upward above the bar (grid 0fr -> 1fr animates the height). */
+.plate-list { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.4s var(--ease); }
+.plate-list > div { min-height: 0; overflow: hidden; }
+.plate-list.open { grid-template-rows: 1fr; }
+.plate-list ul { list-style: none; margin: 0; padding: 4px 4px 0; max-height: 42vh; overflow-y: auto; }
+.plate-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 2px 11px; border-bottom: 0.5px solid var(--line); }
+/* Each item's macros: a P/C/F ribbon (calorie share) over three rolling gram counts. */
+.plate-macros { flex-basis: 100%; display: grid; grid-template-columns: repeat(3, auto); justify-content: start; column-gap: 16px; row-gap: 6px; margin-top: -1px; }
+.plate-ribbon { grid-column: 1 / -1; display: flex; gap: 2px; height: 4px; width: min(100%, 230px); transform-origin: left; animation: grow 0.6s var(--ease) 0.1s both; }
+.plate-ribbon i { display: block; min-width: 0; border-radius: 2px; transition: flex-grow 0.5s var(--ease); }
+.plate-m { display: inline-flex; align-items: baseline; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text2); white-space: nowrap; }
+.plate-m::before { content: ''; align-self: center; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.plate-m b { display: inline-flex; color: var(--c); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.plate-list.open li { animation: rise 0.35s var(--ease) both; }
+.plate-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.plate-name strong { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plate-name small { font-size: 12px; font-weight: 600; color: var(--text2); font-variant-numeric: tabular-nums; }
+.plate-step { display: inline-flex; border-radius: 999px; background: var(--card2); }
+.plate-step button { width: 36px; height: 32px; padding: 0; background: none; box-shadow: none; font-size: 18px; font-weight: 600; color: var(--text); }
+.plate-x { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 50%; background: none; box-shadow: none; color: var(--text2); }
+.plate button.plate-clear { display: block; margin: 2px auto 6px; font-size: 14px; font-weight: 600; color: var(--fat); }
+.plate-fly { position: fixed; z-index: 50; width: 18px; height: 18px; pointer-events: none; }
+.plate-fly span { display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--kcal); box-shadow: 0 2px 8px color-mix(in srgb, var(--kcal) 45%, transparent); }
+body:has(.plate-dock) .add-toast { bottom: calc(env(safe-area-inset-bottom) + 118px); }
+.add-toast span small { display: block; margin-top: 1px; font-size: 12px; font-weight: 600; opacity: 0.65; }
+@keyframes plateIn { from { opacity: 0; transform: translateY(70%) scale(0.96); } }
+@keyframes plateOut { to { opacity: 0; transform: translateY(60%) scale(0.97); } }
+@media (prefers-reduced-motion: reduce) { .plate-dock, .plate-dock.leaving { animation: none; } .plate-fuel span, .plate-list { transition: none; } }
 .add-card-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .add-card-text strong { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-card-text small { font-size: 12px; color: var(--text2); font-weight: 500; }

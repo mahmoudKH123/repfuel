@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import type { Macros } from '../db/types'
 import { useCountUp, useFill } from './motion'
+import { Odometer } from './Odometer'
 
 const k = (v: number) => Math.round(v).toLocaleString('en-US')
 const r1 = (v: number) => Math.round(v * 10) / 10
@@ -62,30 +63,10 @@ function MacroCol({ label, color, eaten, goal, index, memo, more }: { label: str
           </span>
         ) : (
           <span key="num" aria-hidden="true">
-            <Odometer value={Math.abs(left)} memo={`${memo}-left`} delay={0.25 + index * 0.08} /> g {left < 0 ? 'over' : 'left'}
+            <Odometer value={Math.abs(left)} memo={`${memo}-left`} delay={0.2 + index * 0.06} /> g {left < 0 ? 'over' : 'left'}
           </span>
         )}
       </span>
     </div>
   )
-}
-
-/** Fuel-pump counter: every digit sits on its own wheel and rolls to the new value, the right-hand digit first. */
-function Odometer({ value, memo, delay }: { value: number; memo: string; delay: number }) {
-  // Starts from the last value shown (0 on first open) and rolls once it is on screen.
-  const v = Math.round(useFill(value, memo))
-  const chars = k(v).split('')
-  const cells = chars.map((c, i) => {
-    if (c === ',') return <span key={`s${chars.length - i}`} className="odo-sep">,</span>
-    // Position from the right (0 = units), so wheels keep their place as the number shrinks.
-    const p = chars.slice(i + 1).filter((x) => x !== ',').length
-    return (
-      <span key={`d${p}`} className="odo-wheel">
-        <span style={{ transform: `translateY(${-Number(c) * 10}%)`, transitionDelay: `${delay + p * 0.07}s` }}>
-          {'0123456789'.split('').map((d) => <i key={d}>{d}</i>)}
-        </span>
-      </span>
-    )
-  })
-  return <span className="odo">{cells}</span>
 }

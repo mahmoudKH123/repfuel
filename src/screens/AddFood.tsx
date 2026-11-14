@@ -12,6 +12,7 @@ import { searchByName } from '../logic/search'
 import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
 import { useCountUp } from '../ui/motion'
+import { Odometer } from '../ui/Odometer'
 import { IconAi } from '../ui/icons'
 import { CATEGORIES, fmtAmount } from '../ui/format'
 import { availableUnits, convert, fmtQty, gramsFromLabel, quickAmounts, servingNoun, STEP, toBase, toStored, unitName, type AmountUnit, type UnitInfo } from '../logic/units'
@@ -72,7 +73,10 @@ export function AddFood({ date, today, onClose }: Props) {
   const [cat, setCat] = useState<FoodCategory | 'all' | 'review'>('all')
   const [view, setView] = useState<View>({ kind: 'home' })
   const [error, setError] = useState('')
-  const [toast, setToast] = useState<{ text: string; entryId: number } | null>(null)
+  const [toast, setToast] = useState<{ text: string; ids: number[] } | null>(null)
+  // The plate: foods picked to log together, each with its amount. `round` restarts the counters for a fresh plate.
+  const [plate, setPlate] = useState<{ id: number; amount: number }[]>([])
+  const [round, setRound] = useState(0)
   const [done, setDone] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   // The photo being analysed: kept while its screens show it, freed when a new one comes or the page closes.
@@ -107,7 +111,22 @@ export function AddFood({ date, today, onClose }: Props) {
 
   const quickLog = async (f: Food) => {
     const id = await logFood(date, f, defaultAmount(f))
-    setToast({ text: `${f.name} added`, entryId: id })
+    setToast({ text: `${short(f.name)} added`, ids: [id] })
+  }
+
+  const onPlate = new Set(plate.map((p) => p.id))
+  // Tap a food's ring: it goes on the plate (a dot flies down to it), tap again to take it off.
+  const pick = (f: Food, from: Element) => {
+    if (onPlate.has(f.id!)) return setPlate((list) => list.filter((p) => p.id !== f.id))
+    setPlate((list) => [...list, { id: f.id!, amount: defaultAmount(f) }])
+    flyToPlate(from)
+  }
+  const plateItems = plate.map((p) => ({ ...p, food: byId.get(p.id) })).filter((p): p is { id: number; amount: number; food: Food } => !!p.food)
+  const logPlate = () => db.transaction('rw', db.entries, () => Promise.all(plateItems.map((p) => logFood(date, p.food, p.amount))))
+  const plateDone = (ids: number[]) => {
+    setToast({ text: `${ids.length} foods added`, ids })
+    setPlate([])
+    setRound((r) => r + 1)
   }
 
   const showAiFood = (f: AiFood, source: 'ai' | 'label') => setView({
@@ -194,9 +213,15 @@ export function AddFood({ date, today, onClose }: Props) {
     draft: { source: 'manual', name: query.trim(), baseAmount: 1, unit: 'serving', servingLabel: '1 serving', amount: 1, estimate: true, kcal: 0, protein: 0, carbs: 0, fat: 0 },
   })
 
-  const finish = () => {
+  // After adding, stay on this page: a check plays, then you're back at the search with an Undo.
+  const finish = (id: number, name: string) => {
     setDone(true)
-    window.setTimeout(onClose, 650)
+    window.setTimeout(() => {
+      setDone(false)
+      setQuery('')
+      setView({ kind: 'home' })
+      setToast({ text: `${short(name)} added`, ids: [id] })
+    }, 750)
   }
 
   const back = () => {
@@ -206,7 +231,7 @@ export function AddFood({ date, today, onClose }: Props) {
   }
 
   return (
-    <div className={`addpage${view.kind === 'detail' || view.kind === 'meal' ? ' docked' : ''}`} role="dialog" aria-label="Add food">
+    <div className={`addpage${view.kind === 'detail' || view.kind === 'meal' ? ' docked' : ''}${view.kind === 'home' && plateItems.length ? ' plated' : ''}`} role="dialog" aria-label="Add food">
       {/* Copy of the page background over the header (and the Add button when there is one), so content scrolls under cleanly. */}
       <div className="aurora aurora-cover add-cover" aria-hidden="true" />
       <header className="add-top">
@@ -244,10 +269,14 @@ export function AddFood({ date, today, onClose }: Props) {
 
           {!q && recent.length > 0 && (
             <>
-              <h2 className="add-h">Recent <span>tap to add</span></h2>
+              <h2 className="add-h">Recent <span>{plate.length ? 'tap to put on your plate' : 'tap to add'}</span></h2>
               <div className="add-chips">
                 {recent.map((f, i) => (
-                  <button key={f.id} className="add-chip" style={{ animationDelay: `${0.04 * i}s`, ...blend(f) }} onClick={() => quickLog(f)}>
+                  <button
+                    key={f.id} className="add-chip" style={{ animationDelay: `${0.04 * i}s`, ...blend(f) }}
+                    aria-pressed={plate.length ? onPlate.has(f.id!) : undefined}
+                    onClick={(e) => (plate.length ? pick(f, e.currentTarget) : quickLog(f))}
+                  >
                     <i aria-hidden="true" />{short(f.name)}
                   </button>
                 ))}
@@ -267,7 +296,7 @@ export function AddFood({ date, today, onClose }: Props) {
           )}
           <ul className="add-list">
             {matches.map((f, i) => (
-              <FoodCard key={f.id} food={f} index={i} dayTarget={day?.target.kcal ?? 2000} onOpen={() => open(f)} />
+              <FoodCard key={f.id} food={f} index={i} dayTarget={day?.target.kcal ?? 2000} picked={onPlate.has(f.id!)} onPick={(el) => pick(f, el)} onOpen={() => open(f)} />
             ))}
             {q && (
               <li style={{ animationDelay: `${0.04 * Math.min(matches.length, 8)}s` }} className={`add-card add-ai${matches.length ? '' : ' solo'}`}>
@@ -316,17 +345,35 @@ export function AddFood({ date, today, onClose }: Props) {
       )}
 
       {view.kind === 'detail' && (
-        <Detail key={view.draft.name + view.draft.source} draft={view.draft} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} onEdit={view.draft.food ? () => setView({ kind: 'edit', food: view.draft.food! }) : undefined} />
+        <Detail
+          key={view.draft.name + view.draft.source} draft={view.draft} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
+          toPlate={plate.length && view.draft.food ? (amount, from) => {
+            // Building a plate: the chosen amount goes on it (or updates it) instead of logging straight away.
+            const id = view.draft.food!.id!
+            setPlate((list) => (list.some((p) => p.id === id) ? list.map((p) => (p.id === id ? { ...p, amount } : p)) : [...list, { id, amount }]))
+            setView({ kind: 'home' })
+            flyToPlate(from)
+          } : undefined} onEdit={view.draft.food ? () => setView({ kind: 'edit', food: view.draft.food! }) : undefined} />
       )}
 
       {view.kind === 'meal' && (
         <Meal name={view.name} initial={view.items} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
       )}
 
+      {view.kind === 'home' && plateItems.length > 0 && (
+        <Plate
+          key={round} round={round} items={plateItems} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0}
+          onAmount={(id, amount) => setPlate((list) => list.map((p) => (p.id === id ? { ...p, amount } : p)))}
+          onRemove={(id) => setPlate((list) => list.filter((p) => p.id !== id))}
+          onClear={() => { setPlate([]); setRound((r) => r + 1) }}
+          onLog={logPlate} onDone={plateDone}
+        />
+      )}
+
       {toast && (
-        <div className="add-toast" role="status">
-          <span>{toast.text}</span>
-          <button onClick={() => { deleteEntry(toast.entryId); setToast(null) }}>Undo</button>
+        <div key={toast.ids.join()} className="add-toast" role="status">
+          <span>{toast.text}{day && <small>{k(Math.abs(day.target.kcal - day.eaten.kcal))} kcal {day.eaten.kcal > day.target.kcal ? 'over' : 'left'}</small>}</span>
+          <button onClick={() => { toast.ids.forEach((id) => deleteEntry(id)); setToast(null) }}>Undo</button>
         </div>
       )}
 
@@ -392,17 +439,24 @@ function blend(m: Macros): CSSProperties {
   return { '--s1': `${pa / 2}%`, '--s2': `${pa + pc / 2}%`, '--s3': `${pa + pc + (100 - pa - pc) / 2}%` } as CSSProperties
 }
 
-function FoodCard({ food: f, index, dayTarget, onOpen }: { food: Food; index: number; dayTarget: number; onOpen: () => void }) {
+function FoodCard({ food: f, index, dayTarget, picked, onPick, onOpen }: { food: Food; index: number; dayTarget: number; picked: boolean; onPick: (el: Element) => void; onOpen: () => void }) {
   const portion = scaleFood(f, defaultAmount(f))
   const share = Math.min(1, dayTarget ? portion.kcal / dayTarget : 0)
   const r = 15, c = 2 * Math.PI * r
   return (
-    <li className="add-card" style={{ animationDelay: `${0.03 * Math.min(index, 10)}s` }}>
-      <button onClick={onOpen}>
-        <svg className="add-mini" width="38" height="38" viewBox="0 0 38 38" aria-hidden="true">
-          <circle cx="19" cy="19" r={r} className="wk-ring-track" />
-          {share > 0.004 && <circle cx="19" cy="19" r={r} className="wk-ring-arc" strokeDasharray={`${share * c} ${c}`} />}
+    <li className={`add-card${picked ? ' picked' : ''}`} style={{ animationDelay: `${0.03 * Math.min(index, 10)}s` }}>
+      {/* The ring is the plate toggle: it closes into a full circle and fills with a tick. */}
+      <button className="add-pick" onClick={(e) => onPick(e.currentTarget)} aria-pressed={picked} aria-label={picked ? `Take ${f.name} off the plate` : `Put ${f.name} on the plate`}>
+        <svg width="38" height="38" viewBox="0 0 38 38" aria-hidden="true">
+          <g className="add-mini">
+            <circle cx="19" cy="19" r={r} className="wk-ring-track" />
+            <circle cx="19" cy="19" r={r} className="wk-ring-arc" strokeDasharray={`${picked ? c : Math.max(share, 0.004) * c} ${c}`} />
+          </g>
+          <circle cx="19" cy="19" r="13" className="add-pick-fill" />
+          <path d="M13 19.5l4 4 8-8.5" className="add-pick-tick" />
         </svg>
+      </button>
+      <button onClick={onOpen}>
         <span className="add-card-text">
           <strong>{f.name}{f.estimate && <span className="tag">est</span>}{f.needsReview && <span className="tag warn">check</span>}</strong>
           <small>{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)}</small>
@@ -414,13 +468,141 @@ function FoodCard({ food: f, index, dayTarget, onOpen }: { food: Food; index: nu
   )
 }
 
+/** A small dot that arcs from the tapped ring down into the plate, which gives a little bump when it lands. */
+function flyToPlate(from: Element) {
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+  const a = from.getBoundingClientRect()
+  // Two frames: the plate may be mounting this very moment.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const target = document.querySelector('.plate-target')
+    if (!target) return
+    const b = target.getBoundingClientRect()
+    const x0 = a.left + a.width / 2, y0 = a.top + a.height / 2
+    const dx = b.left + 28 - x0, dy = b.top + b.height / 2 - y0
+    const outer = document.createElement('div')
+    outer.className = 'plate-fly'
+    outer.style.left = `${x0 - 9}px`
+    outer.style.top = `${y0 - 9}px`
+    const dot = document.createElement('span')
+    outer.appendChild(dot)
+    document.body.appendChild(outer)
+    // X glides, Y lifts first then drops: together they draw an arc.
+    outer.animate([{ transform: 'translateX(0)' }, { transform: `translateX(${dx}px)` }], { duration: 560, easing: 'cubic-bezier(0.45, 0, 0.55, 1)', fill: 'forwards' })
+    const fall = dot.animate(
+      [{ transform: 'translateY(0) scale(1)' }, { transform: `translateY(${dy}px) scale(0.45)` }],
+      { duration: 560, easing: 'cubic-bezier(0.4, -0.35, 0.75, 1)', fill: 'forwards' },
+    )
+    fall.onfinish = () => {
+      outer.remove()
+      target.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' }], { duration: 280, easing: 'ease-out' })
+    }
+  }))
+}
+
+type PlateItem = { id: number; amount: number; food: Food }
+
+/** The plate: floats at the bottom while foods are picked. Shows the total, what it does to today, and adds them all at once. */
+function Plate({ items, round, eaten, target, onAmount, onRemove, onClear, onLog, onDone }: {
+  items: PlateItem[]; round: number; eaten: number; target: number
+  onAmount: (id: number, amount: number) => void; onRemove: (id: number) => void; onClear: () => void
+  onLog: () => Promise<number[]>; onDone: (ids: number[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [phase, setPhase] = useState<'idle' | 'adding' | 'added' | 'leaving'>('idle')
+  // Today's total at the moment Add is tapped: once saved, the live total already includes the plate.
+  const [frozen, setFrozen] = useState<number | null>(null)
+  const now = frozen ?? eaten
+  const total = items.reduce((t, p) => t + scaleFood(p.food, p.amount).kcal, 0)
+  const before = target ? Math.min(1, now / target) : 0
+  const after = target ? Math.min(1, (now + total) / target) : 0
+  const left = target - now - total
+  const n = items.length
+
+  const add = async () => {
+    if (phase !== 'idle') return
+    setFrozen(eaten)
+    setPhase('adding')
+    setOpen(false)
+    const ids = await onLog()
+    setPhase('added')
+    window.setTimeout(() => setPhase('leaving'), 650)
+    window.setTimeout(() => onDone(ids), 950)
+  }
+
+  return createPortal(
+    <div className={`add-dock plate-dock ${phase}`}>
+      <div className="plate">
+        <div className={`plate-list${open ? ' open' : ''}`} aria-hidden={!open}>
+          <div>
+            <ul>
+              {items.map((p, i) => {
+                const unit = p.food.unit as AmountUnit
+                const step = STEP[unit] ?? 1
+                const m = scaleFood(p.food, p.amount)
+                const kc = m.kcal
+                // Calorie share per macro sizes the ribbon segments.
+                const share = [m.protein * 4, m.carbs * 4, m.fat * 9]
+                return (
+                  <li key={p.id} style={{ animationDelay: `${0.03 * i}s` }}>
+                    <span className="plate-name"><strong>{p.food.name}</strong><small>{fmtAmount(p.amount, p.food.unit)} · {k(kc)} kcal</small></span>
+                    <span className="plate-step">
+                      <button type="button" disabled={p.amount <= step} onClick={() => onAmount(p.id, Math.round((p.amount - step) * 100) / 100)} aria-label={`Less ${p.food.name}`}>−</button>
+                      <button type="button" onClick={() => onAmount(p.id, Math.round((p.amount + step) * 100) / 100)} aria-label={`More ${p.food.name}`}>+</button>
+                    </span>
+                    <button type="button" className="plate-x" onClick={() => onRemove(p.id)} aria-label={`Take ${p.food.name} off the plate`}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                    </button>
+                    <span className="plate-macros" aria-label={`${k(m.protein)} g protein, ${k(m.carbs)} g carbs, ${k(m.fat)} g fat`}>
+                      <span className="plate-ribbon" aria-hidden="true">
+                        {MAC.map((x, n) => <i key={x.key} style={{ flexGrow: share[n] || 0.0001, background: x.color }} />)}
+                      </span>
+                      {MAC.map((x) => (
+                        <span key={x.key} className="plate-m" style={{ '--c': x.color } as CSSProperties} aria-hidden="true">
+                          <b><Odometer value={m[x.key]} memo={`pl-${p.id}-${x.key}`} delay={0} />g</b>{x.label.toLowerCase()}
+                        </span>
+                      ))}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+            <button type="button" className="link plate-clear" onClick={onClear}>Clear plate</button>
+          </div>
+        </div>
+
+        <div className="plate-bar">
+          <button type="button" className="plate-sum plate-target" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={`${n} on your plate, ${k(total)} kcal. ${open ? 'Hide' : 'Show'} list`}>
+            <span className="plate-count" aria-hidden="true"><Odometer value={n} memo={`plate-${round}-n`} delay={0.42} /></span>
+            <span className="plate-text" aria-hidden="true">
+              <b><Odometer value={total} memo={`plate-${round}-k`} delay={0.42} /> kcal</b>
+              <small>{target > 0 ? (left >= 0 ? `${k(left)} left after` : `${k(-left)} over after`) : `${n} on your plate`}</small>
+            </span>
+            <svg className="plate-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+          </button>
+          <button type="button" className="primary plate-go" onClick={add} disabled={phase === 'adding'}>
+            {phase === 'added' || phase === 'leaving'
+              ? <span key="ok" className="plate-ok"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>Added</span>
+              : <span key="add">Add {n}</span>}
+          </button>
+        </div>
+        {/* Today's fuel: grey = already eaten, green = this plate on top. */}
+        <div className={`plate-fuel${now + total > target && target > 0 ? ' over' : ''}`} aria-hidden="true">
+          <span className="plate-fuel-now" style={{ width: `${before * 100}%` }} />
+          <span className="plate-fuel-add" style={{ left: `${before * 100}%`, width: `${Math.max(0, after - before) * 100}%` }} />
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 const MAC = [
   { key: 'protein', label: 'Protein', color: 'var(--protein)' },
   { key: 'carbs', label: 'Carbs', color: 'var(--carbs)' },
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ] as const
 
-function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; eaten: number; target: number; date: string; onDone: () => void; onEdit?: () => void }) {
+function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate }: { draft: Draft; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onEdit?: () => void; toPlate?: (amount: number, from: Element) => void }) {
   const editable = draft.source !== 'saved'
   const [name, setName] = useState(draft.name)
   const [vals, setVals] = useState({ kcal: num(draft.kcal), protein: num(draft.protein), carbs: num(draft.carbs), fat: num(draft.fat) })
@@ -473,6 +655,10 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
     if ([base.kcal, base.protein, base.carbs, base.fat].some((v) => !(v >= 0))) return setError('Numbers must be 0 or more.')
     if (!(base.kcal > 0) && !(base.protein + base.carbs + base.fat > 0)) return setError('Enter the calories.')
     if (!(amt > 0)) return setError('Pick an amount above 0.')
+    if (toPlate) {
+      const btn = document.querySelector('.add-dock .add-go')
+      return toPlate(baseAmt, btn ?? document.body)
+    }
     let foodId = draft.food?.id
     if (draft.source !== 'saved') {
       // Keep the serving weight in the label, so this food can switch units next time too.
@@ -488,8 +674,8 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
       })
     }
     // Logged in the unit you picked (litres saved as ml), with macros already scaled.
-    await logQuick(date, { name: name.trim(), foodId, estimate: draft.estimate, ...toStored(amt, unit), ...portion })
-    onDone()
+    const id = await logQuick(date, { name: name.trim(), foodId, estimate: draft.estimate, ...toStored(amt, unit), ...portion })
+    onDone(id, name.trim())
   }
 
   return (
@@ -594,7 +780,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit }: { draft: Draft; 
       )}
 
       {error && <p className="warn add-error">{error}</p>}
-      <Dock><button type="submit" form="add-form" className="primary add-go">Add {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button></Dock>
+      <Dock><button type="submit" form="add-form" className="primary add-go">{toPlate ? 'Put on plate' : 'Add'} {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button></Dock>
     </form>
   )
 }
@@ -626,7 +812,7 @@ function PortionRing({ kcal, eaten, target }: { kcal: number; eaten: number; tar
 }
 
 /** A described meal split into items: tick, adjust amounts, save new ones, log it all as one entry. */
-function Meal({ name: initialName, initial, eaten, target, date, onDone }: { name: string; initial: MealItem[]; eaten: number; target: number; date: string; onDone: () => void }) {
+function Meal({ name: initialName, initial, eaten, target, date, onDone }: { name: string; initial: MealItem[]; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void }) {
   const [name, setName] = useState(initialName)
   const [items, setItems] = useState(initial)
   const [error, setError] = useState('')
@@ -643,11 +829,11 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone }: { nam
     setBusy(true)
     for (const i of on) if (i.save && !i.food) await saveFood(toFood(i))
     const r1 = (n: number) => Math.round(n * 10) / 10
-    await logQuick(date, {
+    const id = await logQuick(date, {
       name: name.trim(), amount: 1, unit: 'serving', estimate: on.some((i) => i.estimate),
       kcal: Math.round(totals.kcal), protein: r1(totals.protein), carbs: r1(totals.carbs), fat: r1(totals.fat),
     })
-    onDone()
+    onDone(id, name.trim())
   }
 
   return (
