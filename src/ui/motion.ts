@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type TouchEvent } from 'react'
+import { afterIntro } from './introGate'
 
 const reduced = () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
@@ -7,18 +8,21 @@ export function useCountUp(value: number, ms = 700, delay = 0): number {
   const [shown, setShown] = useState(reduced() ? value : 0)
   const from = useRef(shown)
   useEffect(() => {
-    const start = performance.now() + delay
-    const a = from.current
     let id = 0
-    const step = (t: number) => {
-      const k = reduced() ? 1 : Math.max(0, Math.min(1, (t - start) / ms))
-      const v = a + (value - a) * (1 - Math.pow(1 - k, 3))
-      setShown(v)
-      from.current = v
-      if (k < 1) id = requestAnimationFrame(step)
-    }
-    id = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(id)
+    // On a cold start, wait for the launch intro to hand over the page.
+    const cancel = afterIntro(() => {
+      const start = performance.now() + delay
+      const a = from.current
+      const step = (t: number) => {
+        const k = reduced() ? 1 : Math.max(0, Math.min(1, (t - start) / ms))
+        const v = a + (value - a) * (1 - Math.pow(1 - k, 3))
+        setShown(v)
+        from.current = v
+        if (k < 1) id = requestAnimationFrame(step)
+      }
+      id = requestAnimationFrame(step)
+    })
+    return () => { cancel(); cancelAnimationFrame(id) }
   }, [value, ms, delay])
   return shown
 }
@@ -27,8 +31,9 @@ export function useCountUp(value: number, ms = 700, delay = 0): number {
 export function useFill(ratio: number): number {
   const [r, setR] = useState(0)
   useEffect(() => {
-    const id = requestAnimationFrame(() => setR(ratio))
-    return () => cancelAnimationFrame(id)
+    let id = 0
+    const cancel = afterIntro(() => { id = requestAnimationFrame(() => setR(ratio)) })
+    return () => { cancel(); cancelAnimationFrame(id) }
   }, [ratio])
   return r
 }

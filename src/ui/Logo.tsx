@@ -1,5 +1,5 @@
 /** App mark: bold R over a dumbbell charged to 75%. The Home Screen icons in public/ use the same drawing.
- *  Colours come from CSS tokens, so it follows the light/dark theme. */
+ *  Colours come from CSS tokens, so it follows the light/dark theme. The lg-* class names let the launch intro animate each part. */
 const R =
   'M352 180 H552 A120 120 0 0 1 552 420 L680 600 H570 L462 436 H448 V600 H352 Z M448 268 H544 A36 36 0 0 1 544 340 H448 Z'
 
@@ -17,17 +17,17 @@ export function Logo({ size = 28 }: { size?: number }) {
         </linearGradient>
       </defs>
       <rect x="6" y="6" width="1012" height="1012" rx="226" fill="url(#rf-bg)" style={{ stroke: 'var(--logo-edge)' }} strokeWidth="12" />
-      <path d={R} style={{ fill: 'var(--logo-r)' }} fillRule="evenodd" transform="translate(512 380) scale(1.02) translate(-516 -390)" />
+      <path className="lg-r" pathLength={1} d={R} style={{ fill: 'var(--logo-r)' }} fillRule="evenodd" transform="translate(512 380) scale(1.02) translate(-516 -390)" />
       <g style={{ fill: 'var(--logo-plate)' }}>
-        <rect x="692" y="746" width="40" height="48" rx="8" />
-        <rect x="732" y="670" width="56" height="200" rx="16" />
-        <rect x="796" y="704" width="36" height="132" rx="14" />
-        <rect x="292" y="746" width="40" height="48" rx="8" />
-        <rect x="236" y="670" width="56" height="200" rx="16" />
-        <rect x="192" y="704" width="36" height="132" rx="14" />
+        <rect className="lg-p lg-p1 r" x="692" y="746" width="40" height="48" rx="8" />
+        <rect className="lg-p lg-p2 r" x="732" y="670" width="56" height="200" rx="16" />
+        <rect className="lg-p lg-p3 r" x="796" y="704" width="36" height="132" rx="14" />
+        <rect className="lg-p lg-p1 l" x="292" y="746" width="40" height="48" rx="8" />
+        <rect className="lg-p lg-p2 l" x="236" y="670" width="56" height="200" rx="16" />
+        <rect className="lg-p lg-p3 l" x="192" y="704" width="36" height="132" rx="14" />
       </g>
-      <rect x="332" y="714" width="360" height="112" rx="56" style={{ fill: 'var(--logo-cell)', stroke: 'var(--logo-plate)' }} strokeWidth="12" />
-      <rect x="348" y="730" width="246" height="80" rx="40" fill="url(#rf-ch)" />
+      <rect className="lg-cell" x="332" y="714" width="360" height="112" rx="56" style={{ fill: 'var(--logo-cell)', stroke: 'var(--logo-plate)' }} strokeWidth="12" />
+      <rect className="lg-charge" x="348" y="730" width="246" height="80" rx="40" fill="url(#rf-ch)" />
     </svg>
   )
 }

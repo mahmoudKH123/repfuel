@@ -1151,3 +1151,80 @@ button.meal-unit { color: var(--kcal); }
   from { clip-path: inset(0 0 0 0 round 0px); opacity: 1; }
   to { clip-path: inset(var(--o-t) var(--o-r) var(--o-b) var(--o-l) round 22px); opacity: 0.4; }
 }
+
+/* Launch intro (cold start only, see ui/Intro.tsx + ui/introGate.ts). Every part's resting style is its FINAL look and
+   the keyframes animate in from the start state, so "intro-skip" (tap) can drop the animations and land on the built logo. */
+:root[data-intro='build'] .app *, :root[data-intro='build'] .app *::before, :root[data-intro='build'] .app *::after { animation-play-state: paused !important; }
+:root[data-intro] .gr .logo-btn { opacity: 0; }
+.intro { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; touch-action: none; }
+.intro-bg { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
+.intro-bg::after {
+  content: ''; position: absolute; inset: 0; opacity: 0.05; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+/* Three lights (the Today aurora colours) start packed behind the logo and drift out to where the app's own aurora sits,
+   so when the intro fades the page background is already in place. */
+.ib { position: absolute; left: 50%; top: 50%; width: 120vmax; height: 120vmax; margin: -60vmax 0 0 -60vmax; border-radius: 50%;
+  transform: translate(var(--tx), var(--ty)); animation: ibSpread 1.7s cubic-bezier(0.16, 0.84, 0.3, 1) both; }
+.ib1 { --tx: -50vw; --ty: -62vh; background: radial-gradient(circle, color-mix(in srgb, #2fd36a calc(var(--aur) * 1.15), transparent) 0%, transparent 58%); }
+.ib2 { --tx: 58vw; --ty: -24vh; background: radial-gradient(circle, color-mix(in srgb, #14b8a6 var(--aur), transparent) 0%, transparent 56%); animation-delay: 0.08s; }
+.ib3 { --tx: -26vw; --ty: 46vh; background: radial-gradient(circle, color-mix(in srgb, #a3e635 calc(var(--aur) * 0.8), transparent) 0%, transparent 56%); animation-delay: 0.16s; }
+@keyframes ibSpread {
+  0% { transform: translate(0, 0) scale(0.12); opacity: 0; }
+  25% { opacity: 1; }
+  100% { transform: translate(var(--tx), var(--ty)) scale(1); opacity: 1; }
+}
+.intro-stage { position: relative; display: flex; flex-direction: column; align-items: center; }
+.intro-fly { position: relative; width: 120px; height: 120px; }
+.intro-tile { position: relative; width: 120px; height: 120px; border-radius: 26.5px;
+  box-shadow: 0 22px 44px -16px rgba(4, 40, 20, 0.45), 0 6px 14px -4px rgba(0, 0, 0, 0.18);
+  animation: tileIn 0.75s cubic-bezier(0.2, 0.9, 0.25, 1) 0.05s both, tileBump 0.38s ease-out 1.24s; }
+:root[data-theme='dark'] .intro-tile { box-shadow: 0 24px 50px -14px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(92, 240, 140, 0.08); }
+.intro-tile > svg { display: block; overflow: visible; }
+@keyframes tileIn {
+  0% { opacity: 0; transform: translateY(26px) scale(0.42) rotate(-14deg); }
+  55% { opacity: 1; transform: translateY(-3px) scale(1.07) rotate(2deg); }
+  78% { transform: translateY(0) scale(0.98) rotate(-0.5deg); }
+  100% { transform: none; }
+}
+@keyframes tileBump { 40% { transform: scale(1.05); } }
+/* The R draws its outline, then fills in. */
+.intro .lg-r { stroke: var(--logo-r); stroke-width: 16; stroke-linejoin: round; stroke-dasharray: 1 1; stroke-dashoffset: 0; stroke-opacity: 0;
+  animation: rDraw 0.8s cubic-bezier(0.55, 0.1, 0.3, 1) 0.24s both; }
+@keyframes rDraw {
+  0% { stroke-dashoffset: 1; stroke-opacity: 1; fill-opacity: 0; }
+  70% { stroke-dashoffset: 0; stroke-opacity: 1; fill-opacity: 0; }
+  100% { stroke-dashoffset: 0; stroke-opacity: 0; fill-opacity: 1; }
+}
+/* The bar opens from the middle, then the plates slide on from the sides like loading a barbell. */
+.intro .lg-cell { transform-box: fill-box; transform-origin: center; animation: cellIn 0.34s cubic-bezier(0.3, 0.8, 0.3, 1) 0.36s both; }
+@keyframes cellIn { from { transform: scaleX(0.08); opacity: 0; } }
+.intro .lg-p { --dir: -1; animation: plateIn 0.44s cubic-bezier(0.34, 1.5, 0.6, 1) both; }
+.intro .lg-p.r { --dir: 1; }
+.intro .lg-p1 { --dist: 150px; animation-delay: 0.5s; }
+.intro .lg-p2 { --dist: 230px; animation-delay: 0.58s; }
+.intro .lg-p3 { --dist: 300px; animation-delay: 0.66s; }
+@keyframes plateIn { from { transform: translateX(calc(var(--dir) * var(--dist))); opacity: 0; } }
+/* The charge fills, a light runs along it, and when it is full the tile gives one small pulse of light. */
+.intro .lg-charge { transform-box: fill-box; transform-origin: left center; animation: chargeIn 0.46s cubic-bezier(0.65, 0, 0.35, 1) 0.84s both; }
+@keyframes chargeIn { from { transform: scaleX(0); } }
+.intro-shine { position: absolute; left: 32.4%; top: 69.7%; width: 35.2%; height: 10.95%; border-radius: 999px; overflow: hidden; pointer-events: none; }
+.intro-shine::after { content: ''; position: absolute; inset: 0; width: 45%; opacity: 0;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.85), transparent);
+  animation: shine 0.55s ease-in-out 1.1s both; }
+@keyframes shine { 0% { transform: translateX(-110%); opacity: 1; } 100% { transform: translateX(240%); opacity: 1; } }
+.intro-sheen { position: absolute; inset: 0; border-radius: 26.5px; overflow: hidden; pointer-events: none; }
+.intro-sheen::after { content: ''; position: absolute; top: -50%; bottom: -50%; width: 38%; opacity: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.32), transparent); transform: translateX(-160%) rotate(20deg);
+  animation: sheen 0.7s ease-in-out 1.28s both; }
+@keyframes sheen { 0% { transform: translateX(-160%) rotate(20deg); opacity: 1; } 100% { transform: translateX(380%) rotate(20deg); opacity: 1; } }
+.intro-burst { position: absolute; left: 50%; top: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; opacity: 0; pointer-events: none;
+  background: radial-gradient(circle, color-mix(in srgb, var(--logo-ch1) 55%, transparent) 0%, transparent 66%);
+  animation: burst 0.9s cubic-bezier(0.2, 0.7, 0.3, 1) 1.22s both; }
+@keyframes burst { 0% { transform: scale(0.5); opacity: 0; } 18% { opacity: 0.9; } 100% { transform: scale(3.4); opacity: 0; } }
+/* Name: "Rep" in text colour, "Fuel" in brand green, letters rise out of a blur one by one. */
+.intro-word { margin-top: 24px; display: flex; font-size: 36px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; color: var(--text); }
+.intro-word span { display: inline-block; animation: wordIn 0.6s var(--ease) both; animation-delay: calc(0.8s + var(--i) * 0.045s); }
+.intro-word .a { color: var(--accent); }
+@keyframes wordIn { from { opacity: 0; transform: translateY(70%); filter: blur(8px); } }
+.intro-skip .intro-tile, .intro-skip .intro-tile *, .intro-skip .intro-tile *::after, .intro-skip .intro-word span, .intro-skip .intro-burst, .intro-skip .ib { animation: none !important; }
