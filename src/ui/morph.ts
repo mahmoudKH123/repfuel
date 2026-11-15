@@ -20,7 +20,8 @@ type RGBA = [number, number, number, number]
 
 interface Piece {
   el: HTMLElement
-  over?: HTMLElement // second layer that fades in (the grip's tile gradient)
+  base: Box // the element's real size; every frame only scales it (so the morph never triggers layout or repaint)
+  over?: HTMLElement // second layer that fades in (the target colour, or the grip's tile gradient)
   from: Box
   to: Box
   c0?: RGBA
@@ -34,6 +35,8 @@ interface Piece {
   body?: boolean // a solid piece that stretches with speed and squashes on landing (plates, R)
   last?: { x: number; y: number; vx: number; vy: number } // previous centre and smoothed speed (px/ms)
 }
+
+const IDLE = 1700 // after touch-down: everything has settled (cascade, counters, bend), so heavy cleanup can't be seen
 
 const SQUEEZE = 170 // anticipation: the tile gathers itself before the parts lift off
 const RIG = 1000 // the whole dumbbell rising into place
@@ -79,6 +82,7 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
 }): () => void {
   let raf = 0
   const timers: number[] = []
+  let cleanup = () => {}
 
   // 1. Anticipation: a quick gather before everything lifts off.
   tile.animate([{ transform: 'scale(1)' }, { transform: 'scale(0.93)' }], { duration: SQUEEZE, easing: 'cubic-bezier(0.5, 0, 0.75, 0)', fill: 'forwards' })
@@ -93,12 +97,21 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
 
     const pieces: Piece[] = []
     // Stacked like the real bar: rod at the back, then the grip, the R on top of it; plates over the rod.
-    const add = (p: Omit<Piece, 'el'>, cls = '', z = 3) => {
+    const add = (p: Omit<Piece, 'el' | 'base'>, cls = '', z = 3) => {
       const el = document.createElement('div')
       el.className = `mo ${cls}`
-      el.style.zIndex = String(z)
+      // Sized once, at whichever end is bigger, so scaling only ever shrinks it (stays sharp); at the end it is exact.
+      const base = p.from.w * p.from.h > p.to.w * p.to.h ? p.from : p.to
+      Object.assign(el.style, { zIndex: String(z), width: `${base.w}px`, height: `${base.h}px`, borderRadius: `${base.r}px` })
+      if (p.c0) el.style.backgroundColor = mix(p.c0, p.c0, 0)
+      const piece: Piece = { ...p, el, base }
+      if (p.c0 && p.c1 && p.c0.some((v, i) => Math.abs(v - p.c1![i]) > 0.5)) {
+        piece.over = document.createElement('div')
+        piece.over.className = 'mo-to'
+        piece.over.style.backgroundColor = mix(p.c1, p.c1, 0)
+        el.appendChild(piece.over)
+      }
       layer.appendChild(el)
-      const piece = { ...p, el }
       pieces.push(piece)
       return piece
     }
@@ -117,10 +130,10 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
     const gripBox = measure(grip, 8 * bu)
 
     // Centre: the pill becomes the grip (its tile gradient fades in), the charge rides along and fades, the R drops on.
-    const g = add({ from: cellBox, to: gripBox, c0: fill(cell), c1: fill(cell), delay: 0, dur: RIG }, 'mo-grip', 2)
+    const g = add({ from: cellBox, to: gripBox, c0: fill(cell), delay: 0, dur: RIG }, 'mo-grip', 2)
     g.el.style.setProperty('--edge0', getComputedStyle(cell).stroke)
     g.over = document.createElement('div')
-    g.over.className = 'mo-tile'
+    g.over.className = 'mo-tile mo-to'
     g.el.appendChild(g.over)
     add({ from: measure(logo.querySelector('.lg-charge')!, 40 * lu), to: { ...gripBox, w: gripBox.w * 0.62, h: gripBox.h * 0.42, r: gripBox.h * 0.21 }, delay: 0, dur: RIG, fadeOut: true }, 'mo-charge', 2)
     const rEl = add({ from: measure(logo.querySelector('.lg-r')!), to: measure(bar.querySelector('.bb-r path')!), delay: 60, dur: 1050, drop: true, body: true }, 'mo-r', 4).el
@@ -130,7 +143,7 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
     const rodB = measure(rod)
     const rodWidth = (t: number) => lerp(cellBox.w * 0.8, rodB.w + 9 * bu, settle(clamp(t / RIG)))
     const steel = colour(getComputedStyle(rod).stroke)
-    add({ from: { ...cellBox, w: cellBox.w * 0.8, h: cellBox.h * 0.3, r: cellBox.h * 0.15 }, to: { ...rodB, w: rodB.w + 9 * bu, h: 9 * bu, r: 4.5 * bu }, c0: steel, c1: steel, delay: 0, dur: RIG, fadeIn: true }, '', 1)
+    add({ from: { ...cellBox, w: cellBox.w * 0.8, h: cellBox.h * 0.3, r: cellBox.h * 0.15 }, to: { ...rodB, w: rodB.w + 9 * bu, h: 9 * bu, r: 4.5 * bu }, c0: steel, delay: 0, dur: RIG, fadeIn: true }, '', 1)
 
     // Plates slide out along it: inner → collar, big → both big plates (they split apart), outer → medium.
     const plate = (src: Element, dst: Element, delay: number, rx: number, dstRx: number) =>
@@ -142,25 +155,33 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
     // The rod's ends click on as everything arrives.
     for (const e of [endL, endR]) {
       const to = measure(e, 2.5 * bu)
-      add({ from: to, to, c0: fill(e), c1: fill(e), delay: 830, dur: 320, pop: true }, '', 1)
+      add({ from: to, to, c0: fill(e), delay: 830, dur: 320, pop: true }, '', 1)
     }
 
     // The logo's own parts hand over to the flying pieces; the empty tile dissolves.
     for (const part of logo.querySelectorAll('.lg-r, .lg-plates, .lg-cell, .lg-charge')) (part as SVGElement).style.opacity = '0'
-    tile.animate([{ opacity: 1, transform: 'scale(0.93)', filter: 'blur(0px)' }, { opacity: 0, transform: 'scale(1.12)', filter: 'blur(6px)' }], { duration: 420, easing: 'ease-out', fill: 'forwards' })
+    tile.animate([{ opacity: 1, transform: 'scale(0.93)' }, { opacity: 0, transform: 'scale(1.14)' }], { duration: 420, easing: 'ease-out', fill: 'forwards' })
 
     // The bar's shadow on the page, under where it will rest.
     const shadow = document.createElement('div')
     shadow.className = 'mo mo-shadow'
     layer.appendChild(shadow)
     const ground = Math.max(...plates.map((pl) => pl.getBoundingClientRect().bottom)) + 4 * bu
+    const SW = rodB.w, SH = 24 // shadow's real size; scaled per frame
+    Object.assign(shadow.style, { width: `${SW}px`, height: `${SH}px` })
+
+    // What settles in after touch-down, read now so the landing frame does no layout work.
+    const blocks = [...document.querySelectorAll<HTMLElement>('.td-budget > .td-big, .td-budget > .td-cap, .td-budget > .td-macros, .td .wt, .td .td-week, .td .td-loghead, .td .td-group')]
+      .filter((el) => el.getBoundingClientRect().top < window.innerHeight)
+    const tabs = document.querySelector<HTMLElement>('.app > .tabs')
+    const barBox = bar.closest<HTMLElement>('.bb')
 
     // Camera: the page (measured above at its real size) starts close on the bar and pulls back to normal by touch-down.
     const end = MORPH_MS - SQUEEZE
     const shots = [...document.querySelectorAll<HTMLElement>('.app > .appbar, .app > main')].map((el) => {
       const b = el.getBoundingClientRect()
       el.style.transformOrigin = `${gripBox.x - b.left}px ${gripBox.y - b.top}px`
-      const a = el.animate([{ transform: `scale(${ZOOM})` }, { transform: 'scale(1)' }], { duration: end, easing: 'cubic-bezier(0.22, 0.75, 0.2, 1)' })
+      const a = el.animate([{ transform: `scale(${ZOOM})` }, { transform: 'scale(1)' }], { duration: end, easing: 'cubic-bezier(0.22, 0.75, 0.2, 1)', fill: 'forwards' })
       return { el, a }
     })
 
@@ -180,10 +201,8 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
       // Shadow: faint and wide while the bar is high, darker and tighter as it comes down, gone once it has settled.
       const height = Math.max(0, ground - (ay + (ground - gripBox.y)))
       const span = rodWidth(t)
-      const sw = span * (0.9 + height / 120)
-      shadow.style.width = `${sw.toFixed(1)}px`
-      shadow.style.height = `${(14 + height / 6).toFixed(1)}px`
-      shadow.style.transform = `translate(${(ax - sw / 2).toFixed(1)}px, ${(ground - 7 - height / 12).toFixed(1)}px)`
+      const sw = span * (0.9 + height / 120), sh = 14 + height / 6
+      shadow.style.transform = `translate(${(ax - SW / 2).toFixed(1)}px, ${(ground - SH / 2 - height / 12).toFixed(1)}px) scale(${(sw / SW).toFixed(4)}, ${(sh / SH).toFixed(4)})`
       shadow.style.opacity = String((0.34 * rise(ka) / (1 + height / 40)) * (t > TOUCH ? Math.exp(-(t - TOUCH) / 110) : 1))
       for (const p of pieces) {
         const k = clamp((t - p.delay) / p.dur)
@@ -209,36 +228,42 @@ export function morphLogoToBar({ tile, bar, layer, onLand, onDone }: {
           sy = (1 + st * fy - st * 0.45 * fx) * (1 - 0.08 * hit)
         }
         const s = p.el.style
-        s.transform = `translate(${(cx - w / 2).toFixed(2)}px, ${(cy - h / 2).toFixed(2)}px) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`
-        s.width = `${w.toFixed(2)}px`
-        s.height = `${h.toFixed(2)}px`
-        s.borderRadius = `${Math.max(0, lerp(p.from.r, p.to.r, grow)).toFixed(2)}px`
-        if (p.c0 && p.c1) s.backgroundColor = mix(p.c0, p.c1, inOut(k))
-        if (p.over) p.over.style.opacity = String(clamp((k - 0.25) / 0.5))
+        s.transform = `translate(${(cx - p.base.w / 2).toFixed(2)}px, ${(cy - p.base.h / 2).toFixed(2)}px) scale(${((w / p.base.w) * sx).toFixed(4)}, ${((h / p.base.h) * sy).toFixed(4)})`
+        if (p.over) p.over.style.opacity = String(p.over.classList.contains('mo-tile') ? clamp((k - 0.25) / 0.5) : inOut(k))
         s.opacity = p.fadeIn ? String(clamp(k / 0.2)) : p.fadeOut ? String(1 - clamp((k - 0.45) / 0.4)) : p.pop ? String(k > 0 ? 1 : 0) : '1'
       }
+      // Just before landing, the real bar is drawn under the pieces (they cover it), so it's painted before it's needed.
+      if (barBox && t >= end - 60) barBox.style.opacity = '1'
       if (!done) { raf = requestAnimationFrame(frame); return }
-      // 3. Everything is in place: the camera is home, the real bar takes over under the pieces, the page settles in.
+      // 3. Landing, spread over a few frames so no single frame does much:
+      //    now: the pieces give way to the real bar, the page starts settling, the tab bar rises in;
+      //    next frame: counters and the bend start (onLand); idle: camera and intro are cleared away once nothing moves.
+      layer.style.visibility = 'hidden'
+      ;(layer.parentElement as HTMLElement).style.pointerEvents = 'none'
+      settlePage(blocks, tabs)
+      raf = requestAnimationFrame(() => {
+        onLand()
+        timers.push(window.setTimeout(cleanup, IDLE))
+      })
+    }
+    cleanup = () => {
       for (const { el, a } of shots) { a.cancel(); el.style.transformOrigin = '' }
-      onLand()
-      settlePage()
-      raf = requestAnimationFrame(() => { raf = requestAnimationFrame(() => { layer.replaceChildren(); onDone() }) })
+      if (barBox) barBox.style.opacity = ''
+      layer.replaceChildren()
+      cleanup = () => {}
+      onDone()
     }
     raf = requestAnimationFrame(frame)
   }, SQUEEZE))
 
-  return () => { cancelAnimationFrame(raf); timers.forEach((t) => window.clearTimeout(t)) }
+  return () => { cancelAnimationFrame(raf); timers.forEach((t) => window.clearTimeout(t)); cleanup() }
 }
 
 /** After touch-down, what's under the bar (held faint and low during the morph, see index.css) rises into place, one
- *  block after another: the calories, the macros, the water, the week, the log. */
-function settlePage() {
-  const blocks = document.querySelectorAll<HTMLElement>('.td-budget > .td-big, .td-budget > .td-cap, .td-budget > .td-macros, .td .wt, .td .td-week, .td .td-loghead, .td .td-group')
-  let i = 0
-  for (const el of blocks) {
-    if (el.getBoundingClientRect().top > window.innerHeight) continue // below the screen: nothing to see
-    el.animate([{ opacity: 0.16, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }], {
-      duration: 640, delay: 60 + i++ * 70, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', fill: 'backwards',
-    })
-  }
+ *  block after another: the calories, the macros, the water, the week, the log; the tab bar rises in from below.
+ *  Opacity and transform only, so it runs on the graphics chip. */
+function settlePage(blocks: HTMLElement[], tabs: HTMLElement | null) {
+  const ease = 'cubic-bezier(0.2, 0.8, 0.2, 1)'
+  blocks.forEach((el, i) => el.animate([{ opacity: 0.16, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }], { duration: 640, delay: 60 + i * 70, easing: ease, fill: 'backwards' }))
+  tabs?.animate([{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }], { duration: 560, delay: 120, easing: ease, fill: 'backwards' })
 }

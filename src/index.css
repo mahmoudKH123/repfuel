@@ -316,7 +316,9 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
    shown already built: no entrance animations after the morph has landed. */
 :root[data-intro] .bb { opacity: 0; }
 :root[data-intro] .bb *, :root[data-landed] .bb * { animation: none !important; }
-/* ...and what's under it waits faint and a little low until the bar lands, then settles in (morph.ts settlePage). */
+/* ...and what's under it waits faint and a little low until the bar lands, then settles in (morph.ts settlePage). The tab
+   bar waits off too: its frosted-glass blur would have to be redrawn on every frame of the camera move. */
+:root[data-intro] .app > .tabs { opacity: 0; }
 :root[data-intro] .td-budget > .td-big, :root[data-intro] .td-budget > .td-cap, :root[data-intro] .td-budget > .td-macros,
 :root[data-intro] .td .wt, :root[data-intro] .td .td-week, :root[data-intro] .td .td-loghead, :root[data-intro] .td .td-group { opacity: 0.16; transform: translateY(14px); }
 @keyframes bbGrip { from { transform: scaleX(0.325); } }
@@ -1436,7 +1438,7 @@ button.meal-unit { color: var(--kcal); }
    the keyframes animate in from the start state, so "intro-skip" (tap) can drop the animations and land on the built logo. */
 :root[data-intro='build'] .app *, :root[data-intro='build'] .app *::before, :root[data-intro='build'] .app *::after { animation-play-state: paused !important; }
 .intro { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; touch-action: none; }
-.intro-bg { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
+.intro-bg { position: absolute; inset: 0; overflow: hidden; background: var(--bg); will-change: opacity; }
 .intro-bg::after {
   content: ''; position: absolute; inset: 0; opacity: 0.05; mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -1508,9 +1510,10 @@ button.meal-unit { color: var(--kcal); }
 @keyframes wordIn { from { opacity: 0; transform: translateY(70%); filter: blur(8px); } }
 /* Morph pieces: plain boxes flown from the logo's parts to the barbell's (positions and colours set per frame). */
 .intro-layer { position: absolute; inset: 0; pointer-events: none; }
-.mo { position: absolute; left: 0; top: 0; will-change: transform; }
+.mo { position: absolute; left: 0; top: 0; will-change: transform; transform-origin: 50% 50%; }
+.mo-to { position: absolute; inset: 0; border-radius: inherit; opacity: 0; will-change: opacity; }
 .mo-grip { box-shadow: inset 0 0 0 1.3px var(--edge0); }
-.mo-tile { position: absolute; inset: 0; border-radius: inherit; opacity: 0; background: linear-gradient(var(--logo-bg1), var(--logo-bg2)); box-shadow: inset 0 0 0 1px var(--logo-edge); }
+.mo-tile { background: linear-gradient(var(--logo-bg1), var(--logo-bg2)); box-shadow: inset 0 0 0 1px var(--logo-edge); }
 .mo-charge { background: linear-gradient(var(--logo-ch1), var(--logo-ch2)); }
 .mo-r svg { display: block; fill: var(--logo-r); }
 .mo-shadow { z-index: 0; opacity: 0; border-radius: 50%; background: radial-gradient(closest-side, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.18) 55%, transparent); }

@@ -49,7 +49,7 @@ export function Intro({ onRelease, onLand, onDone }: { onRelease: () => void; on
     }
 
     later(() => leave(), BUILD_MS)
-    later(onDone, 6000) // safety net: never leave the overlay up
+    later(onDone, 9000) // safety net: never leave the overlay up
     const skip = () => leave()
     const el = root.current
     el?.addEventListener('pointerdown', skip)

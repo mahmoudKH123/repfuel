@@ -42,10 +42,12 @@ export function mountIntro() {
   // Landing: the page's own barbell appears under the morphed pieces (hidden while html[data-intro] is set), already
   // built: html[data-landed] turns off its own entrance animations for the rest of the session.
   const fly = () => { document.documentElement.dataset.intro = 'fly' }
+  // Landing: counters, fills and the bend start; the page's own intro styles come off a frame later (the morph's settle
+  // animations already hold the same look), so no single frame carries all of it.
   const land = () => {
     document.documentElement.dataset.landed = ''
-    delete document.documentElement.dataset.intro
     if (queue) flush()
+    requestAnimationFrame(() => { delete document.documentElement.dataset.intro })
   }
   root.render(createElement(Intro, { onRelease: fly, onLand: land, onDone: finish }))
 }

@@ -61,7 +61,7 @@ function useBend(goal: number): number {
         if (p < 1) raf = requestAnimationFrame(tick)
       }
       // First time: a beat after the launch morph lands (cold start; this runs at the landing), or after the plates slide on.
-      const delay = lastBend === null ? ('landed' in document.documentElement.dataset ? 220 : 900) : 0
+      const delay = lastBend === null ? ('landed' in document.documentElement.dataset ? 300 : 900) : 0
       lastBend = from // claimed: a remount mid-way won't wait or replay the plates again
       wait = window.setTimeout(() => { raf = requestAnimationFrame(tick) }, delay)
     })
