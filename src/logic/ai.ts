@@ -94,7 +94,7 @@ async function send(body: string, pass: string): Promise<Response> {
 
 type AiRequest =
   | { mode: 'meal'; text: string; foods: string }
-  | { mode: 'search'; text: string; foods: string; fix?: string; current?: string }
+  | { mode: 'search'; text: string; foods: string; fix?: string; current?: string; image?: string; mimeType?: string }
 
 async function post(req: AiRequest): Promise<Record<string, unknown>> {
   if (!AI_URLS.length) throw new Error('AI is not set up yet.')
@@ -119,9 +119,9 @@ export async function askMeal(text: string, foods: string): Promise<AiMeal> {
  * Like askMeal, but the Worker first searches the web for the items (real numbers when found, high-end estimate when not).
  * With `fix`, the AI corrects the current result (`current` = what the screen shows now) instead of starting over.
  */
-export async function askSearch(text: string, foods: string, fix?: { text: string; current: string }): Promise<AiMeal> {
+export async function askSearch(text: string, foods: string, fix?: { text: string; current: string; photo?: { image: string; mimeType: string } }): Promise<AiMeal> {
   if (isMock()) return mockMeal(text, fix?.text)
-  const data = await post({ mode: 'search', text, foods, ...(fix ? { fix: fix.text, current: fix.current } : {}) })
+  const data = await post({ mode: 'search', text, foods, ...(fix ? { fix: fix.text, current: fix.current, ...fix.photo } : {}) })
   const meal = data.meal as AiMeal | undefined
   if (!meal?.items?.length) throw new Error('AI found no food in that. Try describing it differently.')
   return meal
@@ -136,6 +136,8 @@ export type PhotoEvent =
   | { t: 'seen'; text: string }
   | { t: 'item'; i: number; name: string; kcal?: number }
   | { t: 'retry' }
+  /** A label's numbers didn't add up (or were hard to read): the AI is reading it again. */
+  | { t: 'check' }
 
 export type PhotoResult = { kind: 'label'; food: AiFood } | { kind: 'food'; meal: AiMeal } | { kind: 'none'; note: string }
 

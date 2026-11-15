@@ -2,7 +2,8 @@
 // Holds the Gemini key so it never reaches the browser. Two jobs:
 //   POST { mode: "text",  text }               -> estimate for one described food (kept for older app versions)
 //   POST { mode: "meal",  text, foods }        -> the meal split into items; `foods` = the user's saved foods, one per line (kept for older app versions)
-//   POST { mode: "search", text, fix?, current? } -> the meal split into items, looked up on the web (Tavily); saved foods are NOT used.
+//   POST { mode: "search", text, fix?, current?, image?, mimeType? } -> the meal split into items, looked up on the web (Tavily);
+//        saved foods are NOT used. With a fix, `image` is an optional photo (a label or the food) that the correction is based on.
 //        fix = the user's correction ("it was 3 eggs, no oil"), current = the result as they have it now; only what the fix touches changes.
 //   POST { mode: "label", image, mimeType }    -> exact values read from a nutrition-facts photo (kept for older app versions)
 //   POST { mode: "photo", image, mimeType, foods } -> STREAMED (text/event-stream): the AI decides if the photo is a label,
@@ -78,7 +79,8 @@ For a label:
 - confidence: "high" if the label is clear, "medium" if some numbers were hard to read, "low" if guessed.
 For food:
 - Split it into the separate things you can see (a banana = 1 item; chicken, rice and salad = 3 items; a sandwich or a plate of koshary = 1 item).
-- Judge each portion from the photo (plate size, pieces you can count). Be realistic, not padded; assume normal Egyptian portions.
+- Judge each portion from the photo using what is in the frame for scale: a dinner plate is about 26 cm, a fork about 19 cm, a hand about 18 cm, a can 330 ml, a baladi bread about 20 cm. Count pieces where you can. Be realistic, not padded; assume normal Egyptian portions.
+- Portion size is the biggest source of error, so in note give the size you assumed (e.g. "about 250 g rice, half a plate").
 - Home cooking and restaurant food: include the cooking oil, butter, ghee or sauce it is normally made with.
 - The user's saved foods are listed below as "#id | name | numbers per amount". If an item clearly IS one of them, set matchId to that id and amount to how much is shown in that food's unit (grams for "per 100 g", ml for "per 100 ml", servings for "per 1 serving"). Otherwise matchId = 0 and amount = 0.
 - eatenGrams = the TOTAL weight shown in grams (TOTAL ml for drinks); kcal/protein/carbs/fat for that WHOLE amount.
@@ -177,7 +179,9 @@ const RULES_PLAN = `A gym-goer in Egypt wants to log what they ate. Write web se
 - Branded products, chains and restaurants: name the brand and item exactly, plus size and "calories", e.g. "Abou Tarek koshary medium calories", "Juhayna full cream milk nutrition facts per 100ml", "Zain el Sham chicken shawarma sandwich calories".
 - Egyptian dishes without a brand: the dish name plus "calories per 100g", e.g. "molokhia with chicken calories per 100g".
 - Generic foods: aim at nutrition databases, e.g. "boiled egg USDA calories protein per egg", "cooked white rice calories per 100g USDA".
-- If a correction is given, search only for items the correction adds or changes (none if it only changes amounts).`
+- Packaged products (drinks, bars, yogurt, protein shakes): one query with brand + product + "nutrition facts" + "Egypt", and one with brand + product + "openfoodfacts" (label data).
+- If a correction is given: search for items it adds or renames. If it only changes amounts, no queries.
+- If the correction says the numbers are WRONG (without giving numbers), search again with DIFFERENT words than before: add "Egypt", the bottle or pack size, "nutrition facts label", "per 100ml", or "openfoodfacts".`
 
 const PLAN_SCHEMA = {
   type: 'OBJECT',
@@ -191,12 +195,13 @@ For each item:
 - Find it in the web results: the exact product, brand, restaurant or dish. Best sources, in order: the brand or restaurant's own page or pack label; nutrition databases (USDA FoodData Central, FatSecret, Nutritionix, MyFitnessPal, CalorieKing); then anything else. Ignore recipe blogs when a database or brand source exists.
 - Read the source's basis carefully (per 100 g, per piece, per serving, per cup) and convert to the amount actually eaten.
 - Sanity check: kcal should be close to 4 x protein + 4 x carbs + 9 x fat. If a source's numbers don't add up, prefer another source.
-- If good sources disagree, use the HIGHER values (safer for calorie counting).
+- Choosing between sources, always in this order, so the same meal gives the same answer every time: 1) exact product/restaurant AND size match, 2) best source type in the order above, 3) if two equally good sources still disagree, the HIGHER values (safer for calorie counting).
 - Named brand or restaurant but no source for THAT brand (only generic numbers): use the generic numbers only as a base, take the HIGH end, and add what that place typically adds (bigger restaurant portions, garlic sauce / toum, tahini, oil, butter, fries inside). Confidence "medium", and note says "No <brand> data, high end of generic".
 - source: the short site name you used (e.g. "fdc.nal.usda.gov", "elmenus.com"), or "" if no result matched this item.
 - note: one short line saying what you used, e.g. "USDA large boiled egg 78 kcal x 2" or "elmenus: medium box 650 kcal".
 - No matching result: estimate at the HIGH end of a realistic range for that portion (safe for calorie counting, still believable), always count the cooking oil, butter, ghee or sauce it is normally made with, confidence at most "medium", and start note with "High-end estimate".
 - Assume normal Egyptian portions unless the user gives an amount.
+- Products sold in several versions (sizes, countries, or variants such as "Protein Milk" vs "Muscle Milk"): pick the version that best matches the user's words, prefer the one sold in Egypt, and put the exact product and size in name (e.g. "Almarai Protein Milk Chocolate 400 ml") so the user can see which one you used. Mention the other version in note if it is close.
 Fields:
 - matchId = 0 and amount = 0 always.
 - eatenGrams = the TOTAL weight eaten in grams (TOTAL ml for drinks), and kcal/protein/carbs/fat for that WHOLE amount (e.g. "300ml milk" -> eatenGrams 300 and the kcal of all 300 ml).
@@ -205,7 +210,10 @@ Fields:
 - name: short, clear, in English. mealName: a short name for the whole meal.
 - confidence: "high" when an exact-match source was used, "medium" for a close match or a typical dish, "low" for vague descriptions.
 Corrections:
-- If a correction and the current result are given, apply the correction to the current result. Keep every item it does not touch exactly as it is (same name, amount and numbers). Change, add or remove only what the correction says, and look up anything new in the web results.`
+- If a correction and the current result are given, apply the correction to the current result. Keep every item it does not touch exactly as it is (same name, amount and numbers). Change, add or remove only what the correction says, and look up anything new in the web results.
+- If the correction gives numbers (kcal, protein, carbs, fat, size, per 100 ml or per bottle), use them EXACTLY, scaled to the amount eaten, with source "your numbers" and confidence "high". Do not "correct" the user's numbers.
+- If a PHOTO is attached to the correction: a nutrition label = copy its numbers EXACTLY (prefer per 100 g/ml, convert kJ to kcal, scale to the amount eaten, use the pack size printed on it when the user didn't say), source "label photo", confidence "high". A photo of the food = use it to judge what and how much was eaten.
+- If the correction says the result is wrong without numbers, do NOT repeat the same numbers: use a different matching source or the other product version from the web results, and say in note which one you switched to.`
 
 const SEARCH_SCHEMA = {
   ...MEAL_SCHEMA,
@@ -229,8 +237,44 @@ const MAX_FOODS_TEXT = 15_000 // saved-food list sent with meal requests
 
 // Low thinking keeps answers fast (default "medium" took 2+ minutes). Each model gets 25 s before we move on.
 const THINKING = { thinkingConfig: { thinkingLevel: 'low' } }
+// Same seed every call: the same words give the same queries and the same answer (15/11: one shake gave 292, then 330).
+const SEED = { seed: 7 }
 const MODEL_TIMEOUT_MS = 25_000
 const TOTAL_BUDGET_MS = 50_000 // the app gives up at 60 s, so always answer before that
+
+/** Labels: kcal should be close to 4 x protein + 4 x carbs + 9 x fat. Fibre and polyols explain small gaps, not big ones. */
+const labelOff = (l) => {
+  const calc = 4 * num(l.protein) + 4 * num(l.carbs) + 9 * num(l.fat)
+  return Math.abs(num(l.kcal) - calc) > Math.max(25, 0.2 * Math.max(num(l.kcal), calc))
+}
+
+const RULES_RECHECK = (first) => `A first reading of this nutrition label gave: ${JSON.stringify({ basis: first.basis, servingGrams: first.servingGrams, kcal: first.kcal, protein: first.protein, carbs: first.carbs, fat: first.fat })}.
+${labelOff(first) ? `That does not add up: 4 x protein + 4 x carbs + 9 x fat = ${Math.round(4 * num(first.protein) + 4 * num(first.carbs) + 9 * num(first.fat))} kcal, not ${num(first.kcal)}.` : 'It was marked as hard to read.'}
+Read the label again from scratch, slowly. Check each number: decimal points and commas (3,6 = 3.6), kJ vs kcal, which column (per 100 g vs per serving), and that you did not take sugars or saturated fat instead of total carbs or total fat.
+If the label itself really is printed that way, copy it as printed and say so in note.`
+
+/** Re-reads a label that doesn't add up (or was hard to read) with deeper thinking. Returns the better reading. */
+async function recheckLabel(first, image, mimeType, env, deadline) {
+  if (!labelOff(first) && first.confidence === 'high') return first
+  const payload = {
+    contents: [{ parts: [{ text: `${RULES_LABEL}\n\n${RULES_RECHECK(first)}` }, { inline_data: { mime_type: mimeType || 'image/jpeg', data: image } }] }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: LABEL_SCHEMA, thinkingConfig: { thinkingLevel: 'high' } },
+  }
+  for (const model of env.MODELS.split(',').map((m) => m.trim()).reverse()) {
+    const left = deadline - Date.now()
+    if (left < 4_000) break
+    const t0 = Date.now()
+    const r = await callModel(model, payload, env.GEMINI_API_KEY, Math.min(MODEL_TIMEOUT_MS, left))
+    console.log(JSON.stringify({ mode: 'recheck', model, status: r.status, ms: Date.now() - t0, firstOff: labelOff(first) }))
+    if (r.status !== 200) continue
+    const second = parseJson((r.data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''))
+    if (!second) break
+    if (!labelOff(second)) return second
+    // Still doesn't add up after two careful reads: keep it, but say so.
+    return { ...second, confidence: 'medium', note: "Calories and macros on this label don't add up. Check them against the pack." }
+  }
+  return labelOff(first) ? { ...first, confidence: 'low', note: "Calories and macros on this label don't add up. Check them against the pack." } : first
+}
 
 const MAX_IMAGE_B64 = 4_000_000 // ~3 MB photo; the app shrinks photos well below this
 
@@ -264,7 +308,7 @@ export default {
         contents: [{ parts: [{ text: `${RULES_PHOTO}\n\nSaved foods:\n${foods || '(none)'}` }, { inline_data: { mime_type: body.mimeType || 'image/jpeg', data: body.image } }] }],
         generationConfig: { responseMimeType: 'application/json', responseSchema: PHOTO_SCHEMA, ...THINKING },
       }
-      return photoStream(payload, env, { ...cors, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+      return photoStream(payload, env, { image: body.image, mimeType: body.mimeType }, { ...cors, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
     }
 
     let payload
@@ -285,15 +329,21 @@ export default {
       const text = body.text.trim().slice(0, 800)
       const fix = typeof body.fix === 'string' ? body.fix.trim().slice(0, 500) : ''
       const current = fix && typeof body.current === 'string' ? body.current.slice(0, 3_000) : ''
-      const ask = `Meal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}` : ''}`
-      const web = await webLookup(ask, env)
+      // A photo only comes with a correction ("here's the label").
+      const image = fix && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64 ? body.image : ''
+      const ask = `Meal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}${image ? ' (photo attached)' : ''}` : ''}`
+      // A photo with no other words is a label or the food itself: it has the answer, so skip the web search.
+      const web = image && /^\(photo\)$/.test(fix) ? { text: '', sites: new Set() } : await webLookup(ask, env)
       // Sites the AI may name as a source: this search's results, plus sources already on screen (a fix keeps those).
       for (const m of current.matchAll(/from ([a-z0-9.-]+\.[a-z]{2,})/gi)) web.sites.add(m[1].toLowerCase())
       sites = web.sites
       payload = {
-        contents: [{ parts: [{ text: `${RULES_SEARCH}\n\n${ask}\n\nWeb results:\n${web.text || '(none found)'}` }] }],
+        contents: [{ parts: [
+          { text: `${RULES_SEARCH}\n\n${ask}\n\nWeb results:\n${web.text || '(none found)'}` },
+          ...(image ? [{ inline_data: { mime_type: body.mimeType || 'image/jpeg', data: image } }] : []),
+        ] }],
         // Deeper reasoning here: reading sources and converting portions is where accuracy is won or lost.
-        generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, thinkingConfig: { thinkingLevel: 'high' } },
+        generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, thinkingConfig: { thinkingLevel: 'high' }, ...SEED },
       }
     } else if (body.mode === 'label' && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64) {
       payload = {
@@ -328,11 +378,11 @@ export default {
       if (body.mode === 'meal' || body.mode === 'search') {
         const meal = fromMeal(raw)
         // A source the search never returned is made up (seen: "egmenus.com"): drop it, so the item counts as an estimate.
-        if (sites) for (const i of meal.items) if (i.source && !knownSite(i.source, sites)) i.source = ''
+        if (sites) for (const i of meal.items) if (i.source && i.source !== 'your numbers' && i.source !== 'label photo' && !knownSite(i.source, sites)) i.source = ''
         if (!meal.items.length) return reply(502, { error: 'AI found no food in that. Try describing it differently.' })
         return reply(200, { meal, model })
       }
-      return reply(200, { food: body.mode === 'label' ? fromLabel(raw) : fromText(raw), model })
+      return reply(200, { food: body.mode === 'label' ? fromLabel(await recheckLabel(raw, body.image, body.mimeType, env, deadline)) : fromText(raw), model })
     }
     return reply(503, {
       error: lastStatus === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.',
@@ -407,7 +457,7 @@ async function webLookup(ask, env) {
   for (const model of env.MODELS.split(',').map((m) => m.trim()).reverse()) {
     const r = await callModel(model, {
       contents: [{ parts: [{ text: `${RULES_PLAN}\n\n${ask}` }] }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: PLAN_SCHEMA, ...THINKING },
+      generationConfig: { responseMimeType: 'application/json', responseSchema: PLAN_SCHEMA, ...THINKING, ...SEED },
     }, env.GEMINI_API_KEY, 10_000)
     if (r.status !== 200) continue
     const raw = parseJson((r.data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''))
@@ -482,7 +532,7 @@ async function tavily(query, key) {
  *   done  {kind, food | meal | note}   the final answer, same shapes as the label and meal modes
  *   error {error}
  */
-function photoStream(payload, env, headers) {
+function photoStream(payload, env, photo, headers) {
   const { readable, writable } = new TransformStream()
   const out = writable.getWriter()
   const enc = new TextEncoder()
@@ -506,6 +556,10 @@ function photoStream(payload, env, headers) {
         if (r.status !== 200) return await send({ t: 'error', error: `AI error (${r.status}).` })
         const raw = parseJson(r.text)
         if (!raw) return await send({ t: 'error', error: 'AI gave an unreadable answer. Try again.' })
+        if (raw.kind === 'label' && raw.label) {
+          await send({ t: 'check' })
+          raw.label = await recheckLabel(raw.label, photo.image, photo.mimeType, env, deadline)
+        }
         return await send(fromPhoto(raw))
       }
       await send({ t: 'error', error: lastStatus === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.' })

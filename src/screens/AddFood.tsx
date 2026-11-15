@@ -43,6 +43,8 @@ interface Draft extends Macros {
   initialUnit?: AmountUnit
   /** Site the AI found the numbers on (web search). */
   web?: string
+  /** Amount guessed from a food photo: shown with Smaller / As guessed / Bigger so you check it. */
+  guessed?: boolean
 }
 
 /** A typed AI result: the words you typed, and how many times it was fixed (so the screen refreshes in place). */
@@ -57,9 +59,11 @@ interface PhotoRun {
   seen?: string
   items: { name: string; kcal?: number }[]
   retried?: boolean
+  /** The label is being read a second time. */
+  checking?: boolean
 }
 
-type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string } | PhotoRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft; ai?: AiCtx } | { kind: 'meal'; name: string; items: MealItem[]; ai?: AiCtx }
+type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string } | PhotoRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft; ai?: AiCtx } | { kind: 'meal'; name: string; items: MealItem[]; ai?: AiCtx; guessed?: boolean }
 
 export function AddFood({ date, today, onClose }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
@@ -152,12 +156,16 @@ export function AddFood({ date, today, onClose }: Props) {
   }
 
   // "It was 3 eggs, no oil": the AI corrects what the screen shows now, and the same screen updates. Errors show in the fix box.
-  const fixMeal = async (ai: AiCtx, correction: string, current: string) => {
-    const meal = await askSearch(ai.text, foodsContext(foods), { text: correction, current })
+  const fixMeal = async (ai: AiCtx, correction: string, current: string, file?: File) => {
+    let photo
+    if (file) {
+      try { photo = await photoToBase64(file) } catch { throw new Error('Could not open that photo. Try another one.') }
+    }
+    const meal = await askSearch(ai.text, foodsContext(foods), { text: correction || '(photo)', current, photo })
     showMeal(meal, { text: ai.text, rev: ai.rev + 1 })
   }
 
-  const showMeal = (meal: AiMeal, ai?: AiCtx) => {
+  const showMeal = (meal: AiMeal, ai?: AiCtx, guessed?: boolean) => {
     const items = buildItems(meal, foods)
     if (items.length === 1) {
       const i = items[0]
@@ -168,11 +176,11 @@ export function AddFood({ date, today, onClose }: Props) {
         // Countable (egg, banana): numbers per piece so the page says "eggs"; otherwise per the weight eaten.
         const perPiece = i.baseUnit !== 'serving' && i.gramsPerServing
         const base = perPiece ? round1All(scaleFood({ ...i.base, baseAmount: i.baseAmount }, i.gramsPerServing!)) : i.base
-        setView({ kind: 'detail', ai, draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: i.estimate, web: i.source, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, ...base } })
+        setView({ kind: 'detail', ai, draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: i.estimate, web: i.source, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, guessed, ...base } })
       }
       return
     }
-    setView({ kind: 'meal', name: meal.name, items, ai })
+    setView({ kind: 'meal', name: meal.name, items, ai, guessed })
   }
 
   // Any photo: the AI decides label / food / nothing, and each step it reports updates the screen as it happens.
@@ -198,6 +206,7 @@ export function AddFood({ date, today, onClose }: Props) {
       if (e.t === 'retry') return { ...r, done: 2, found: undefined, seen: undefined, items: [], retried: true }
       if (e.t === 'kind') return { ...r, done: 3, found: e.kind }
       if (e.t === 'seen') return { ...r, seen: e.text }
+      if (e.t === 'check') return { ...r, checking: true }
       const items = [...r.items]
       items[e.i] = { name: e.name, kcal: e.kcal ?? items[e.i]?.kcal }
       return { ...r, items }
@@ -210,7 +219,7 @@ export function AddFood({ date, today, onClose }: Props) {
       await new Promise((ok) => setTimeout(ok, 450))
       if (!live()) return
       if (res.kind === 'label') showAiFood(res.food, 'label')
-      else if (res.kind === 'food') showMeal(res.meal)
+      else if (res.kind === 'food') showMeal(res.meal, undefined, true)
       else setView({ kind: 'nofood', photo, note: res.note })
     } catch (e) {
       if (!live()) return
@@ -357,7 +366,7 @@ export function AddFood({ date, today, onClose }: Props) {
 
       {view.kind === 'detail' && (
         <Detail
-          key={view.draft.name + view.draft.source + (view.ai?.rev ?? '')} draft={view.draft} onFix={view.ai ? (c, cur) => fixMeal(view.ai!, c, cur) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
+          key={view.draft.name + view.draft.source + (view.ai?.rev ?? '')} draft={view.draft} onFix={view.ai ? (c, cur, f) => fixMeal(view.ai!, c, cur, f) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
           toPlate={plate.length && view.draft.food ? (amount, from) => {
             // Building a plate: the chosen amount goes on it (or updates it) instead of logging straight away.
             const id = view.draft.food!.id!
@@ -368,7 +377,7 @@ export function AddFood({ date, today, onClose }: Props) {
       )}
 
       {view.kind === 'meal' && (
-        <Meal key={view.ai?.rev ?? 0} name={view.name} initial={view.items} onFix={view.ai ? (c, cur) => fixMeal(view.ai!, c, cur) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
+        <Meal key={view.ai?.rev ?? 0} name={view.name} initial={view.items} guessed={view.guessed} onFix={view.ai ? (c, cur, f) => fixMeal(view.ai!, c, cur, f) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
       )}
 
       {view.kind === 'home' && plateItems.length > 0 && (
@@ -400,13 +409,13 @@ export function AddFood({ date, today, onClose }: Props) {
 
 /** The photo being analysed, with real steps ticking off as the AI reports them and the items it finds popping in. */
 function PhotoProgress({ run }: { run: PhotoRun }) {
-  const { done, found, seen, items } = run
+  const { done, found, seen, items, checking } = run
   const look = found === 'label' ? 'Nutrition label found' : found === 'none' ? 'No food spotted' : seen ? `Spotted: ${seen}` : 'Food found'
   const steps: [string, string][] = [
     ['Preparing photo', 'Photo ready'],
     ['Sending to AI', 'Sent to AI'],
     ['Looking at the photo', look],
-    found === 'label' ? ['Reading the numbers', 'Numbers read'] : found === 'none' ? ['Double-checking', 'Checked'] : ['Working out portions and macros', 'Macros worked out'],
+    found === 'label' ? [checking ? 'Numbers didn\'t add up, reading again' : 'Reading the numbers', 'Numbers read'] : found === 'none' ? ['Double-checking', 'Checked'] : ['Working out portions and macros', 'Macros worked out'],
   ]
   return (
     <div className="add-busy add-scan" aria-live="polite">
@@ -613,7 +622,7 @@ const MAC = [
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ] as const
 
-type OnFix = (correction: string, current: string) => Promise<void>
+type OnFix = (correction: string, current: string, photo?: File) => Promise<void>
 
 function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: { draft: Draft; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onEdit?: () => void; toPlate?: (amount: number, from: Element) => void; onFix?: OnFix }) {
   const editable = draft.source !== 'saved'
@@ -716,6 +725,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
         ))}
       </div>
 
+      {draft.guessed && <GuessNote />}
       <div className="card add-amount">
         <div className="add-amount-head">
           <span>How much?</span>
@@ -737,6 +747,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
           </div>
           <button type="button" onClick={() => bump(step)} aria-label="More">+</button>
         </div>
+        {draft.guessed && <SizeChips guess={convert(draft.amount, draft.initialUnit ?? draft.unit, unit, info)} amount={amt} unit={unit} onPick={(v) => { setAmount(String(v)); setError('') }} />}
         <p className="add-equiv" aria-live="polite">{other && equiv > 0 ? `≈ ${fmtQty(equiv, other)}${other === 'serving' ? ' ' + unitName('serving', noun, false, equiv) : ''}` : '\u00a0'}</p>
         <div className="add-qchips" key={unit}>
           {quickAmounts(unit, info).map((v, i) => (
@@ -793,7 +804,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
         </button>
       )}
 
-      {onFix && <FixBox onFix={(c) => onFix(c, `${name.trim() || draft.name}${draft.source === 'saved' ? ' (saved food)' : ''}${draft.web ? ` (from ${draft.web})` : ''}: ${fmtQty(amt, unit)} ${unitName(unit, noun, false, amt)} = ${macroText(portion)}`)} />}
+      {onFix && <FixBox onFix={(c, f) => onFix(c, `${name.trim() || draft.name}${draft.source === 'saved' ? ' (saved food)' : ''}${draft.web ? ` (from ${draft.web})` : ''}: ${fmtQty(amt, unit)} ${unitName(unit, noun, false, amt)} = ${macroText(portion)}`, f)} />}
 
       {error && <p className="warn add-error">{error}</p>}
       <Dock><button type="submit" form="add-form" className="primary add-go">{toPlate ? 'Put on plate' : 'Add'} {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button></Dock>
@@ -828,7 +839,7 @@ function PortionRing({ kcal, eaten, target }: { kcal: number; eaten: number; tar
 }
 
 /** A described meal split into items: tick, adjust amounts, save new ones, log it all as one entry. */
-function Meal({ name: initialName, initial, eaten, target, date, onDone, onFix }: { name: string; initial: MealItem[]; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onFix?: OnFix }) {
+function Meal({ name: initialName, initial, guessed, eaten, target, date, onDone, onFix }: { name: string; initial: MealItem[]; guessed?: boolean; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onFix?: OnFix }) {
   const [name, setName] = useState(initialName)
   const [items, setItems] = useState(initial)
   const [error, setError] = useState('')
@@ -867,11 +878,12 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone, onFix }
       </div>
 
       <h2 className="add-h">Items <span>tick what you ate, fix amounts</span></h2>
+      {guessed && <GuessNote />}
       <ul className="meal-list">
-        {items.map((i, n) => <MealRow key={i.key} item={i} index={n} onChange={(p) => set(i.key, p)} />)}
+        {items.map((i, n) => <MealRow key={i.key} item={i} index={n} guess={guessed && !i.food ? initial.find((g) => g.key === i.key) : undefined} onChange={(p) => set(i.key, p)} />)}
       </ul>
 
-      {onFix && <FixBox onFix={(c) => onFix(c, on.map((i) => `${i.name}${i.food ? ' (saved food)' : ''}${i.source ? ` (from ${i.source})` : ''}: ${fmtQty(i.amount, i.unit)} ${unitName(i.unit, servingNoun(i.servingLabel), false, i.amount)} = ${macroText(itemMacros(i))}`).join('\n'))} />}
+      {onFix && <FixBox onFix={(c, f) => onFix(c, on.map((i) => `${i.name}${i.food ? ' (saved food)' : ''}${i.source ? ` (from ${i.source})` : ''}: ${fmtQty(i.amount, i.unit)} ${unitName(i.unit, servingNoun(i.servingLabel), false, i.amount)} = ${macroText(itemMacros(i))}`).join('\n'), f)} />}
 
       {error && <p className="warn add-error">{error}</p>}
       <Dock><button type="submit" form="add-form" className="primary add-go" disabled={busy}>Add meal {on.length ? `${k(totals.kcal)} kcal` : ''}</button></Dock>
@@ -879,7 +891,7 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone, onFix }
   )
 }
 
-function MealRow({ item: i, index, onChange }: { item: MealItem; index: number; onChange: (p: Partial<MealItem>) => void }) {
+function MealRow({ item: i, index, guess, onChange }: { item: MealItem; index: number; guess?: MealItem; onChange: (p: Partial<MealItem>) => void }) {
   const m = itemMacros(i)
   const noun = servingNoun(i.servingLabel)
   const units = availableUnits(itemInfo(i)).filter((u): boolean => u !== 'l')
@@ -914,12 +926,33 @@ function MealRow({ item: i, index, onChange }: { item: MealItem; index: number; 
           </label>
           <button type="button" onClick={() => bump(step)} aria-label="More">+</button>
           <span className="meal-equiv">{other && equiv > 0 ? `≈ ${fmtQty(equiv, other)}${other === 'serving' ? ' ' + unitName('serving', noun, false, equiv) : ''}` : ''}</span>
+          {guess && <SizeChips guess={convert(guess.amount, guess.unit, i.unit, itemInfo(i))} amount={i.amount} unit={i.unit} onPick={(v) => onChange({ amount: v })} />}
           {!i.food && (
             <button type="button" className="meal-save" aria-pressed={i.save} onClick={() => onChange({ save: !i.save })}>{i.save ? 'Will save' : 'Save'}</button>
           )}
         </div>
       )}
     </li>
+  )
+}
+
+/** A photo can't show weight or hidden oil, so the guessed amount is the part to check. */
+function GuessNote() {
+  return <p className="add-guess">Amounts are guessed from the photo, the part most likely to be off. Check them before adding.</p>
+}
+
+const SIZES = [['Smaller', 0.75], ['As guessed', 1], ['Bigger', 1.33]] as const
+
+/** Smaller / As guessed / Bigger: quick fixes around the AI's guess, in the unit you're using. */
+function SizeChips({ guess, amount, unit, onPick }: { guess: number; amount: number; unit: AmountUnit; onPick: (v: number) => void }) {
+  const r = (v: number) => (unit === 'serving' ? Math.max(0.25, Math.round(v * 4) / 4) : Math.max(1, Math.round(v / 5) * 5))
+  return (
+    <div className="add-size" role="group" aria-label="Portion size">
+      {SIZES.map(([label, f]) => {
+        const v = f === 1 ? guess : r(guess * f)
+        return <button type="button" key={label} aria-pressed={Math.abs(amount - v) < 1e-6} onClick={() => onPick(v)}>{label}</button>
+      })}
+    </div>
   )
 }
 
@@ -968,30 +1001,52 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
 
 const macroText = (m: Macros) => `${Math.round(m.kcal)} kcal, P ${Math.round(m.protein)} g, C ${Math.round(m.carbs)} g, F ${Math.round(m.fat)} g`
 
-/** "Not quite right?": type a correction and the AI updates this same screen (no starting over). */
-function FixBox({ onFix }: { onFix: (text: string) => Promise<void> }) {
+/** "Not quite right?": type a correction and/or add a photo (label or the food); the AI updates this same screen. */
+function FixBox({ onFix }: { onFix: (text: string, photo?: File) => Promise<void> }) {
   const [text, setText] = useState('')
+  const [photo, setPhoto] = useState<File | null>(null)
+  const [thumb, setThumb] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => () => { if (thumb) URL.revokeObjectURL(thumb) }, [thumb])
+  const pick = (f?: File) => {
+    if (!f) return
+    setPhoto(f)
+    setThumb(URL.createObjectURL(f))
+    setError('')
+  }
+  const clear = () => { setPhoto(null); setThumb('') }
   const go = async () => {
     const t = text.trim()
-    if (!t || busy) return
+    if ((!t && !photo) || busy) return
     setBusy(true)
     setError('')
     // On success the screen re-opens with the fixed numbers, so this box starts fresh.
-    try { await onFix(t) } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); setBusy(false) }
+    try { await onFix(t, photo ?? undefined) } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); setBusy(false) }
   }
   return (
     <div className={`card add-fix${busy ? ' busy' : ''}`}>
-      <label className="add-fix-label" htmlFor="add-fix">Not quite right? Tell the AI</label>
+      <label className="add-fix-label" htmlFor="add-fix">Not quite right? Tell the AI or add a photo</label>
+      <input ref={fileRef} className="visually-hidden" type="file" accept="image/*" tabIndex={-1} aria-hidden="true" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = '' }} />
+      {thumb && (
+        <div className="add-fix-photo">
+          <img src={thumb} alt="Photo for the fix" />
+          <span>{busy ? 'Reading photo…' : 'Photo added'}</span>
+          {!busy && <button type="button" onClick={clear} aria-label="Remove photo">×</button>}
+        </div>
+      )}
       <div className="add-fix-row">
+        <button type="button" className="add-fix-cam" disabled={busy} onClick={() => fileRef.current?.click()} aria-label="Add a photo: the label or the food">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.5" /></svg>
+        </button>
         <input
-          id="add-fix" value={text} disabled={busy} enterKeyHint="send" autoComplete="off" placeholder="e.g. it was 3 eggs, no oil"
+          id="add-fix" value={text} disabled={busy} enterKeyHint="send" autoComplete="off" placeholder={photo ? 'Anything to add? (optional)' : 'e.g. it was 3 eggs, no oil'}
           onChange={(e) => { setText(e.target.value); setError('') }}
           // Enter fixes; it must not submit the Add form around this box.
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); go() } }}
         />
-        <button type="button" className="add-fix-go" disabled={!text.trim() || busy} onClick={go}>{busy ? 'Fixing…' : 'Fix'}</button>
+        <button type="button" className="add-fix-go" disabled={(!text.trim() && !photo) || busy} onClick={go}>{busy ? 'Fixing…' : 'Fix'}</button>
       </div>
       {busy && <div className="add-progress"><span /></div>}
       {error && <p className="warn">{error}</p>}
