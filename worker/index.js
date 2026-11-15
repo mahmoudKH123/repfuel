@@ -2,7 +2,7 @@
 // Holds the Gemini key so it never reaches the browser. Two jobs:
 //   POST { mode: "text",  text }               -> estimate for one described food (kept for older app versions)
 //   POST { mode: "meal",  text, foods }        -> the meal split into items; `foods` = the user's saved foods, one per line (kept for older app versions)
-//   POST { mode: "search", text, foods, fix?, current? } -> like meal, but first searches the web (Tavily) for the items.
+//   POST { mode: "search", text, fix?, current? } -> the meal split into items, looked up on the web (Tavily); saved foods are NOT used.
 //        fix = the user's correction ("it was 3 eggs, no oil"), current = the result as they have it now; only what the fix touches changes.
 //   POST { mode: "label", image, mimeType }    -> exact values read from a nutrition-facts photo (kept for older app versions)
 //   POST { mode: "photo", image, mimeType, foods } -> STREAMED (text/event-stream): the AI decides if the photo is a label,
@@ -172,9 +172,11 @@ const MEAL_SCHEMA = {
 }
 
 const RULES_PLAN = `A gym-goer in Egypt wants to log what they ate. Write web search queries to find real nutrition facts for it.
-- One query per item worth looking up, at most 3, most important first. Skip items that clearly ARE one of the saved foods listed below.
-- Make each query specific: brand, restaurant or chain, size and the word "calories", e.g. "Abou Tarek koshary medium calories", "Juhayna full cream milk 1L nutrition facts".
-- Generic foods are fine too, e.g. "boiled egg large calories protein".
+- At most 3 queries in total, the item with the most calories first.
+- A single restaurant or branded item: use 2 queries for it, its exact name with "calories", and the place with "menu calories" (menu sites like elmenus or talabat often list them).
+- Branded products, chains and restaurants: name the brand and item exactly, plus size and "calories", e.g. "Abou Tarek koshary medium calories", "Juhayna full cream milk nutrition facts per 100ml", "Zain el Sham chicken shawarma sandwich calories".
+- Egyptian dishes without a brand: the dish name plus "calories per 100g", e.g. "molokhia with chicken calories per 100g".
+- Generic foods: aim at nutrition databases, e.g. "boiled egg USDA calories protein per egg", "cooked white rice calories per 100g USDA".
 - If a correction is given, search only for items the correction adds or changes (none if it only changes amounts).`
 
 const PLAN_SCHEMA = {
@@ -183,15 +185,27 @@ const PLAN_SCHEMA = {
   required: ['queries'],
 }
 
-const RULES_SEARCH = `${RULES_MEAL.replace(/- Be realistic:[^\n]*\n/, '')}
-Web results:
-- Live web search results are listed below. Use a result when it clearly matches the item (same product, brand, restaurant or dish, and a size you can convert). Prefer the brand or restaurant's own page, the pack label, and nutrition databases (USDA, FatSecret, Nutritionix, MyFitnessPal) over blogs.
+const RULES_SEARCH = `You work out calories and macros for a meal eaten by a gym-goer in Egypt, using LIVE WEB RESULTS (listed below). Accuracy matters more than anything.
+Split the meal into its separate items (e.g. "koshary and a pepsi" = 2 items; "chicken, rice and salad" = 3 items). A dish eaten as one thing (a sandwich, a plate of koshary) is ONE item.
+For each item:
+- Find it in the web results: the exact product, brand, restaurant or dish. Best sources, in order: the brand or restaurant's own page or pack label; nutrition databases (USDA FoodData Central, FatSecret, Nutritionix, MyFitnessPal, CalorieKing); then anything else. Ignore recipe blogs when a database or brand source exists.
+- Read the source's basis carefully (per 100 g, per piece, per serving, per cup) and convert to the amount actually eaten.
+- Sanity check: kcal should be close to 4 x protein + 4 x carbs + 9 x fat. If a source's numbers don't add up, prefer another source.
 - If good sources disagree, use the HIGHER values (safer for calorie counting).
-- Convert the source's numbers to the amount actually eaten.
-- source: the short site name you used (e.g. "fatsecret.com"), or "" if no result matched.
-- No matching result and not a saved food: estimate at the HIGH end of a realistic range for that portion (safe for calorie counting, still believable), always count the cooking oil, butter, ghee or sauce, confidence at most "medium", and say "high-end estimate" in note.
+- Named brand or restaurant but no source for THAT brand (only generic numbers): use the generic numbers only as a base, take the HIGH end, and add what that place typically adds (bigger restaurant portions, garlic sauce / toum, tahini, oil, butter, fries inside). Confidence "medium", and note says "No <brand> data, high end of generic".
+- source: the short site name you used (e.g. "fdc.nal.usda.gov", "elmenus.com"), or "" if no result matched this item.
+- note: one short line saying what you used, e.g. "USDA large boiled egg 78 kcal x 2" or "elmenus: medium box 650 kcal".
+- No matching result: estimate at the HIGH end of a realistic range for that portion (safe for calorie counting, still believable), always count the cooking oil, butter, ghee or sauce it is normally made with, confidence at most "medium", and start note with "High-end estimate".
+- Assume normal Egyptian portions unless the user gives an amount.
+Fields:
+- matchId = 0 and amount = 0 always.
+- eatenGrams = the TOTAL weight eaten in grams (TOTAL ml for drinks), and kcal/protein/carbs/fat for that WHOLE amount (e.g. "300ml milk" -> eatenGrams 300 and the kcal of all 300 ml).
+- servingLabel is always ONE countable unit, "1 <thing>" (e.g. "1 egg", "1 medium plate", "1 sandwich"), and gramsPerServing = the weight of ONE such unit, or 0 if it is not countable (e.g. rice by weight).
+- statedWeight: true if the user wrote this item's amount as a weight or volume (g, kg, ml, L), else false. liquid: true for drinks and soups you measure in ml.
+- name: short, clear, in English. mealName: a short name for the whole meal.
+- confidence: "high" when an exact-match source was used, "medium" for a close match or a typical dish, "low" for vague descriptions.
 Corrections:
-- If a correction and the current result are given, apply the correction to the current result. Keep every item it does not touch exactly as it is (same name, amount and numbers). Change, add or remove only what the correction says.`
+- If a correction and the current result are given, apply the correction to the current result. Keep every item it does not touch exactly as it is (same name, amount and numbers). Change, add or remove only what the correction says, and look up anything new in the web results.`
 
 const SEARCH_SCHEMA = {
   ...MEAL_SCHEMA,
@@ -208,7 +222,7 @@ const SEARCH_SCHEMA = {
   },
 }
 
-const MAX_WEB_TEXT = 9_000 // web snippets sent to the model
+const MAX_WEB_TEXT = 14_000 // web snippets sent to the model
 const SEARCH_TIMEOUT_MS = 8_000
 
 const MAX_FOODS_TEXT = 15_000 // saved-food list sent with meal requests
@@ -267,18 +281,19 @@ export default {
         generationConfig: { responseMimeType: 'application/json', responseSchema: MEAL_SCHEMA, ...THINKING },
       }
     } else if (body.mode === 'search' && typeof body.text === 'string' && body.text.trim()) {
-      const foods = typeof body.foods === 'string' ? body.foods.slice(0, MAX_FOODS_TEXT) : ''
+      // Saved foods are NOT used here: tapping Estimate means "look it up", the saved list is already shown above it.
       const text = body.text.trim().slice(0, 800)
       const fix = typeof body.fix === 'string' ? body.fix.trim().slice(0, 500) : ''
       const current = fix && typeof body.current === 'string' ? body.current.slice(0, 3_000) : ''
-      const ask = `Saved foods:\n${foods || '(none)'}\n\nMeal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}` : ''}`
+      const ask = `Meal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}` : ''}`
       const web = await webLookup(ask, env)
       // Sites the AI may name as a source: this search's results, plus sources already on screen (a fix keeps those).
       for (const m of current.matchAll(/from ([a-z0-9.-]+\.[a-z]{2,})/gi)) web.sites.add(m[1].toLowerCase())
       sites = web.sites
       payload = {
         contents: [{ parts: [{ text: `${RULES_SEARCH}\n\n${ask}\n\nWeb results:\n${web.text || '(none found)'}` }] }],
-        generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, ...THINKING },
+        // Deeper reasoning here: reading sources and converting portions is where accuracy is won or lost.
+        generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, thinkingConfig: { thinkingLevel: 'high' } },
       }
     } else if (body.mode === 'label' && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64) {
       payload = {
@@ -291,7 +306,11 @@ export default {
 
     let lastStatus = 0
     const deadline = Date.now() + TOTAL_BUDGET_MS
-    for (const model of env.MODELS.split(',').map((m) => m.trim())) {
+    // Search: the fast model first. On the free tier the bigger one timed out (25 s) or was "high demand" on every call
+    // (Vercel logs 15/11/2026), so it only wasted time; it stays as the fallback.
+    const models = env.MODELS.split(',').map((m) => m.trim())
+    if (body.mode === 'search') models.reverse()
+    for (const model of models) {
       const left = deadline - Date.now()
       if (left < 4_000) break
       const t0 = Date.now()
@@ -417,12 +436,27 @@ function knownSite(source, sites) {
   return false
 }
 
+/** The lines of a web page that carry nutrition numbers (kcal, protein, carbs, fat, serving sizes), up to ~1,200 chars. */
+const NUTRITION_WORDS = /(kcal|calor|energy|protein|carb|fat|fiber|sugar|serving|portion|per 100|سعر|بروتين|كربوهيدرات|دهون)/i
+function nutritionLines(raw) {
+  if (typeof raw !== 'string' || !raw) return ''
+  const lines = raw.slice(0, 60_000).split(/\n|(?<=[.;|])\s+/).map((l) => l.replace(/\s+/g, ' ').trim())
+  let out = ''
+  for (const l of lines) {
+    if (l.length < 6 || l.length > 300 || !/\d/.test(l) || !NUTRITION_WORDS.test(l)) continue
+    if (out.length + l.length > 1_200) break
+    out += ` | ${l}`
+  }
+  return out ? ` Page numbers:${out}` : ''
+}
+
 async function tavily(query, key) {
   try {
     const res = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ query, search_depth: 'basic', max_results: 4, include_answer: false }),
+      // Basic depth = 1 credit. Raw page text is where the actual numbers usually are (snippets often cut them off).
+      body: JSON.stringify({ query, search_depth: 'basic', max_results: 4, include_answer: false, include_raw_content: 'text' }),
       signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
     })
     if (!res.ok) return []
@@ -430,7 +464,8 @@ async function tavily(query, key) {
     return (data.results ?? []).map((x) => {
       let site = ''
       try { site = new URL(x.url).hostname.replace(/^www\./, '') } catch { /* keep blank */ }
-      return { site, title: String(x.title ?? '').slice(0, 120), content: String(x.content ?? '').replace(/\s+/g, ' ').slice(0, 600) }
+      const snippet = String(x.content ?? '').replace(/\s+/g, ' ').slice(0, 500)
+      return { site, title: String(x.title ?? '').slice(0, 120), content: `${snippet}${nutritionLines(x.raw_content)}` }
     })
   } catch {
     return []
