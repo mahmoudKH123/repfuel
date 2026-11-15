@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { archiveFood, saveFood } from '../db/repo'
 import type { Food, FoodCategory, Unit } from '../db/types'
 import { CATEGORIES } from '../ui/format'
-import { kcalFromMacros, kcalLooksWrong } from '../logic/macros'
+import { autoKcal, kcalFromMacros, kcalLooksWrong } from '../logic/macros'
 
 /** Edit or delete a saved food. Opened from a saved food in Add food. */
 export function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => void }) {
@@ -20,7 +20,13 @@ export function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => 
     note: food.note ?? '',
   })
   const [error, setError] = useState('')
-  const set = (k: keyof typeof f, v: string | boolean) => { setF({ ...f, [k]: v }); setError('') }
+  const set = (k: keyof typeof f, v: string | boolean) => {
+    const next = { ...f, [k]: v }
+    // Changing protein, carbs or fat recalculates calories (4/4/9).
+    if (k === 'protein' || k === 'carbs' || k === 'fat') next.kcal = autoKcal(next)
+    setF(next)
+    setError('')
+  }
 
   const m = { kcal: Number(f.kcal), protein: Number(f.protein || 0), carbs: Number(f.carbs || 0), fat: Number(f.fat || 0) }
   const mismatch = f.kcal !== '' && kcalLooksWrong(m)

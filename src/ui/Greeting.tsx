@@ -1,63 +1,41 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { type CSSProperties } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
-import { dayIndex, mondayOf } from '../logic/schedule'
 import { greetingFor, skyAt } from '../logic/sun'
-import { useWeek } from './hooks'
+import { useNow, useWeek } from './hooks'
+import { formatDay } from '../logic/dates'
 import { Logo } from './Logo'
 
-const k = (v: number) => Math.round(v).toLocaleString('en-US')
-
-/** Re-reads the time every minute so the hello and its colour follow the time of day. */
-function useNow(): Date {
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 60_000)
-    const vis = () => setNow(new Date())
-    document.addEventListener('visibilitychange', vis)
-    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', vis) }
-  }, [])
-  return now
-}
-
-/** One useful line from today's data: the workout (or rest) and the calories that are left. */
-function useLine(today: string): string {
+/** Living logo data: the charge is today's calories eaten vs target; plates sit on the bar once the workout is
+ *  finished (or on a rest day, when nothing is owed). */
+function useFuel(today: string): { charge: number; plates: boolean } {
   const week = useWeek(today, today)
-  const monday = mondayOf(today)
-  const plan = useLiveQuery(() => db.weeks.get(monday), [monday])
-  const days = useLiveQuery(() => db.plan.toArray(), [])
   const session = useLiveQuery(() => db.sessions.where('date').equals(today).first(), [today])
   const day = week?.days.find((d) => d.date === today)
-  if (!day) return ' '
-  const planned = plan?.days[dayIndex(monday, today)]
-  const doneId = session && session.done.length > 0 ? session.dayId : undefined
-  const workout = days?.find((d) => d.id === (doneId ?? planned))
-  const left = day.target.kcal - day.eaten.kcal
-  const lead = doneId && workout ? `${workout.short} done`
-    : day.type === 'training' ? (workout ? `${workout.short} day` : 'Training day')
-    : 'Rest day'
-  const fuel = left < 0 ? `${k(-left)} kcal over`
-    : day.eaten.kcal === 0 ? `${k(left)} kcal to ${day.type === 'training' ? 'fuel it' : 'spend'}`
-    : `${k(left)} kcal left`
-  return `${lead} · ${fuel}`
+  if (!day) return { charge: 0, plates: true }
+  return {
+    charge: day.target.kcal > 0 ? day.eaten.kcal / day.target.kcal : 0,
+    plates: day.type === 'rest' || !!session?.finishedAt,
+  }
 }
 
-/** Greeting: hello for the hour (tinted by the light outside), name, and one smart line. Plays once on open. */
+/** Top row on every tab: the living logo tile (where the launch intro lands) and, beside it, three lines exactly as
+ *  tall as the tile: hello for the hour, your name, today's date (16 + 24 + 14 = 54 px). Plays once on open. */
 export function Greeting({ today, name, onLogo, logoLabel }: { today: string; name: string; onLogo: () => void; logoLabel: string }) {
   const now = useNow()
   const sky = skyAt(now)
-  const line = useLine(today)
+  const fuel = useFuel(today)
   return (
     <div className="gr" data-phase={sky.phase}>
-      <button className="logo-btn" onClick={onLogo} aria-label={logoLabel}>
-        <Logo size={36} />
+      <button className="logo-btn" onClick={onLogo} aria-label={`${logoLabel}. ${Math.round(fuel.charge * 100)}% of today's calories eaten`}>
+        <Logo size={54} charge={fuel.charge} plates={fuel.plates} />
       </button>
       <div className="gr-text">
         <span className="gr-hello">{greetingFor(now.getHours())}</span>
         <strong className="gr-name" aria-label={name}>
           {[...name].map((ch, i) => <span key={i} aria-hidden="true" style={{ animationDelay: `${0.12 + i * 0.035}s` } as CSSProperties}>{ch}</span>)}
         </strong>
-        <span className="gr-line">{line}</span>
+        <span className="gr-day">{formatDay(today, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
       </div>
     </div>
   )

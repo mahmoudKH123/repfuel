@@ -61,6 +61,8 @@ export interface Settings {
   name?: string
   /** Normal Mon..Sun training week (plan day ids or 'rest'); new weeks start from it. */
   trainingWeek?: string[]
+  /** Water to drink a day, in ml (4 L if never set). */
+  waterGoalMl?: number
 }
 
 export interface SettingRow {
@@ -128,4 +130,11 @@ export interface WeekPlan {
   missed: number[]
   /** You chose to sort out an overflow yourself; don't ask again this week. */
   declined?: boolean
+}
+
+/** Water drunk on a day. `sips` keeps each add in order so the last one can be undone. */
+export interface WaterLog {
+  date: string
+  ml: number
+  sips: number[]
 }

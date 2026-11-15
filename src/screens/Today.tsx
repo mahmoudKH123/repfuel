@@ -5,10 +5,14 @@ import type { Entry } from '../db/types'
 import { copyDay, deleteEntry, restoreEntry, setDayType, updateEntryAmount, updateEntryTime } from '../db/repo'
 import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType, type WeekSummary } from '../logic/budget'
+import { dayIndex, mondayOf } from '../logic/schedule'
 import { useSettings, useWeek } from '../ui/hooks'
 import { fmtAmount } from '../ui/format'
 import { useSwipe } from '../ui/motion'
 import { Budget } from '../ui/Budget'
+import { Barbell } from '../ui/Barbell'
+import { Water } from '../ui/Water'
+import { DEFAULT_WATER_GOAL } from '../db/defaults'
 
 interface Props {
   date: string
@@ -32,6 +36,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
   const settings = useSettings()
   const week = useWeek(date, today)
   const entries = useLiveQuery(() => db.entries.where('date').equals(date).sortBy('createdAt'), [date]) ?? []
+  const water = useLiveQuery(() => db.water.get(date), [date])
   const [notice, setNotice] = useState('')
   const [showHint, setShowHint] = useState(() => { try { return !localStorage.getItem(HINT_KEY) } catch { return true } })
   const hideHint = () => {
@@ -57,6 +62,12 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
   if (shown.date !== date) setShown({ date, dir: date > shown.date ? 'next' : 'prev' })
   const swipe = useSwipe(() => onDateChange(addDays(date, 1)), () => onDateChange(addDays(date, -1)))
 
+  // The giant word: the workout planned (or done) on this day, or REST.
+  const monday = mondayOf(date)
+  const plan = useLiveQuery(() => db.weeks.get(monday), [monday])
+  const planDays = useLiveQuery(() => db.plan.toArray(), [])
+  const session = useLiveQuery(() => db.sessions.where('date').equals(date).first(), [date])
+
   const day = week?.days.find((d) => d.date === date)
   if (!week || !day) return null
 
@@ -67,6 +78,9 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
   }
 
   const training = day.type === 'training'
+  const doneId = session && session.done.length > 0 ? session.dayId : undefined
+  const workout = planDays?.find((d) => d.id === (doneId ?? plan?.days[dayIndex(monday, date)]))
+  const word = (training ? workout?.short || 'Train' : 'Rest').toUpperCase()
   const toggleType = () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings))
   const groups = TIMES.map((t, i) => ({
     ...t,
@@ -75,19 +89,24 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
 
   return (
     <section className="td">
-      <header className="td-head">
-        <div className="td-date">
-          <h1>{date === today ? 'Today' : formatDay(date, { weekday: 'long' })}</h1>
-          <span>{formatDay(date, { weekday: date === today ? 'long' : undefined, day: 'numeric', month: 'long' })}</span>
+      {date !== today && (
+        <div className="td-other">
+          <span><b>{formatDay(date, { weekday: 'long' })}</b> · {formatDay(date, { day: 'numeric', month: 'long' })}</span>
+          <button className="td-back" onClick={() => onDateChange(today)}>Back to today</button>
         </div>
-        {date !== today && <button className="td-back" onClick={() => onDateChange(today)}>Today</button>}
-        <button className={`td-type${training ? '' : ' rest'}`} onClick={toggleType} aria-label={`${training ? 'Training' : 'Rest'} day, tap to switch`}>
-          <i aria-hidden="true" />{training ? 'Training' : 'Rest'}
-        </button>
-      </header>
+      )}
 
       <div key={`b-${date}`} className={`dayview ${shown.dir}`} {...swipe}>
-        <Budget eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
+        {/* Tap to switch Training / Rest. Training = solid word, Rest = outlined; letters drop in when it changes. */}
+        <button key={word} className={`td-tag${training ? '' : ' rest'}`} onClick={toggleType} aria-label={`${training ? `Training day${workout ? `, ${workout.name}` : ''}` : 'Rest day'}. Tap to switch to ${training ? 'rest' : 'training'}`}>
+          <small aria-hidden="true">{training ? (session?.finishedAt ? 'Done' : 'Training') : 'Rest day'}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7" /></svg>
+          </small>
+          <b aria-hidden="true">{[...word].map((ch, i) => <span key={i} style={{ '--i': i } as CSSProperties}>{ch}</span>)}</b>
+        </button>
+        <Barbell entries={entries} target={day.target.kcal} />
+        <Budget compact eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
+        <Water date={date} ml={water?.ml ?? 0} sips={water?.sips.length ?? 0} goal={settings.waterGoalMl ?? DEFAULT_WATER_GOAL} />
       </div>
       {/* The day picker stays put while the day changes, so its date bubble can glide to the new day. */}
       <div className="dayview" {...swipe}>
@@ -112,7 +131,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
           {entries.length === 0 && <h3>Nothing yet</h3>}
           <div className="td-list td-actions">
             <button className="td-addrow" onClick={onAdd}>
-              <span aria-hidden="true">+</span>Add food
+              <span className="td-plus" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round"><path d="M12 4v16M4 12h16" /></svg></span>Add food
             </button>
             {entries.length === 0 && (
               <button className="td-addrow quiet" onClick={copyYesterday}>

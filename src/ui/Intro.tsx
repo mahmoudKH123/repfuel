@@ -6,7 +6,7 @@ const WORD = [...'Rep'].map((c) => ({ c, accent: false })).concat([...'Fuel'].ma
 const ease = 'cubic-bezier(0.32, 0.72, 0, 1)'
 
 /** Launch intro: the emerald light spreads out from the centre, the logo builds itself (tile springs in, R draws,
- *  plates slide onto the bar, the bar charges), the name rises in, then the logo flies into its place in the greeting
+ *  plates slide onto the bar, the bar charges), the name rises in, then the logo flies into its tile in the top row
  *  while the page comes alive underneath. Tap anywhere to skip to the flight. */
 export function Intro({ onRelease, onDone }: { onRelease: () => void; onDone: () => void }) {
   const root = useRef<HTMLDivElement>(null)
@@ -26,7 +26,7 @@ export function Intro({ onRelease, onDone }: { onRelease: () => void; onDone: ()
     const leave = (waited = 0) => {
       if (leaving.current) return
       const target = document.querySelector('.gr .logo-btn svg')?.getBoundingClientRect()
-      // The page renders after the database opens; on a slow first start wait for the greeting logo (up to 1.5 s).
+      // The page renders after the database opens; on a slow first start wait for the target logo (up to 1.5 s).
       if (!target && waited < 1500) { later(() => leave(waited + 80), 80); return }
       leaving.current = true
       if (performance.now() - started.current < BUILD_MS) root.current?.classList.add('intro-skip')

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type TouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
+import { DEFAULT_WATER_GOAL } from '../db/defaults'
 import { db } from '../db/db'
 import { addExerciseToDay, deleteWeight, logWeight, removeExerciseFromDay, renamePlanDay, reorderDay, saveExercise, saveSettings, saveTrainingWeek } from '../db/repo'
 import { exportBackup, parseBackup, restoreBackup } from '../db/backup'
@@ -8,7 +9,7 @@ import type { DayType, Exercise, Macros, PlanDay, Settings as SettingsT } from '
 import { addDays, formatDay } from '../logic/dates'
 import { weeklyWeights } from '../logic/weight'
 import { dayType } from '../logic/budget'
-import { sum } from '../logic/macros'
+import { kcalFromMacros, sum } from '../logic/macros'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, mondayOf } from '../logic/schedule'
 import { applyWeights, fmtWeight } from '../logic/train'
 import { getPass, setPass } from '../logic/ai'
@@ -279,9 +280,13 @@ function TargetsPanel({ settings }: { settings: SettingsT }) {
   const [draft, setDraft] = useState(settings)
   const [type, setType] = useState<DayType>('training')
   const [saved, setSaved] = useState(false)
+  const [waterText, setWaterText] = useState(String((settings.waterGoalMl ?? DEFAULT_WATER_GOAL) / 1000))
   const t = draft.targets[type]
   const set = (key: keyof Macros, v: number) => {
-    setDraft({ ...draft, targets: { ...draft.targets, [type]: { ...t, [key]: Math.max(0, Math.round(v)) } } })
+    const next = { ...t, [key]: Math.max(0, Math.round(v)) }
+    // Changing protein, carbs or fat recalculates calories (4/4/9).
+    if (key !== 'kcal') next.kcal = Math.round(kcalFromMacros(next))
+    setDraft({ ...draft, targets: { ...draft.targets, [type]: next } })
     setSaved(false)
   }
   const fromMacros = t.protein * 4 + t.carbs * 4 + t.fat * 9
@@ -341,6 +346,21 @@ function TargetsPanel({ settings }: { settings: SettingsT }) {
         <span>Reference weight</span>
         <span className="st-inline">
           <input inputMode="decimal" value={draft.referenceWeightKg} onChange={(e) => { setDraft({ ...draft, referenceWeightKg: Number(e.target.value) || 0 }); setSaved(false) }} aria-label="Reference weight kg" /> kg
+        </span>
+      </div>
+
+      <div className="st-row">
+        <span>Water a day</span>
+        <span className="st-inline">
+          <input
+            inputMode="decimal" value={waterText} aria-label="Water a day in litres"
+            onChange={(e) => {
+              const text = e.target.value.replace(',', '.').replace(/[^\d.]/g, '')
+              setWaterText(text)
+              const l = Number(text)
+              if (l > 0) { setDraft({ ...draft, waterGoalMl: Math.round(Math.min(10, l) * 1000) }); setSaved(false) }
+            }}
+          /> L
         </span>
       </div>
 

@@ -13,7 +13,8 @@ const MACROS = [
 ] as const
 
 /** The day's budget straight on the page: kcal left as the headline, one bar, three macros. */
-export function Budget({ eaten, target, fatOver, scope = 'today' }: { eaten: Macros; target: Macros; fatOver: number; scope?: string }) {
+/** `compact` (Today) drops the bar because the barbell above shows it. */
+export function Budget({ eaten, target, fatOver, scope = 'today', compact = false }: { eaten: Macros; target: Macros; fatOver: number; scope?: string; compact?: boolean }) {
   const left = target.kcal - eaten.kcal
   const over = left < 0
   // Remembered per page, so switching day rolls the number from its last value instead of restarting at 0.
@@ -27,12 +28,12 @@ export function Budget({ eaten, target, fatOver, scope = 'today' }: { eaten: Mac
     ? { background: `linear-gradient(90deg, var(--protein) 0 ${(kp / tot) * 100}%, var(--carbs) 0 ${((kp + kc) / tot) * 100}%, var(--fat) 0)` }
     : {}
   return (
-    <div className="td-budget">
+    <div className={`td-budget${compact ? ' compact' : ''}`}>
       <p className={`td-big${over ? ' over' : ''}`}>{k(shown)}</p>
       <p className="td-cap">{over ? 'kcal over' : 'kcal left'} <span>of {k(target.kcal)}{scope === 'today' ? '' : ` ${scope}`}</span></p>
-      <div className="td-bar" role="progressbar" aria-label="Calories eaten" aria-valuenow={Math.round(eaten.kcal)} aria-valuemax={Math.round(target.kcal)}>
+      {!compact && <div className="td-bar" role="progressbar" aria-label="Calories eaten" aria-valuenow={Math.round(eaten.kcal)} aria-valuemax={Math.round(target.kcal)}>
         <span style={{ width: `${fill * 100}%`, ...blend }} />
-      </div>
+      </div>}
       <div className="td-macros">
         {MACROS.map((m, i) => (
           <MacroCol key={m.key} memo={`${scope}-${m.key}`} label={m.label} color={m.color} eaten={eaten[m.key]} goal={target[m.key]} index={i} more={m.key === 'protein'} />

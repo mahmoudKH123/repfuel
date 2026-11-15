@@ -28,6 +28,13 @@ export function defaultAmount(food: Pick<Food, 'baseAmount' | 'unit'>): number {
 /** Calories implied by the macros (4/4/9), used to catch data-entry mistakes. */
 export const kcalFromMacros = (m: Macros) => m.protein * 4 + m.carbs * 4 + m.fat * 9
 
+/** Calories (as text) from macro text fields, for auto-filling kcal as macros are typed. Blank when no macros. */
+export function autoKcal(v: { protein: string; carbs: string; fat: string }): string {
+  const n = (x: string) => Number(x) || 0
+  if (v.protein === '' && v.carbs === '' && v.fat === '') return ''
+  return String(Math.round(n(v.protein) * 4 + n(v.carbs) * 4 + n(v.fat) * 9))
+}
+
 /** True when stated kcal is far from what the macros add up to. */
 export function kcalLooksWrong(m: Macros): boolean {
   const implied = kcalFromMacros(m)

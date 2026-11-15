@@ -9,3 +9,6 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultRestDays: [0, 5],
   referenceWeightKg: 74.5,
 }
+
+/** Daily water goal when Settings has none, in ml. */
+export const DEFAULT_WATER_GOAL = 4000

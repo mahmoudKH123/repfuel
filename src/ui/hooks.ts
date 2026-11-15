@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import { DEFAULT_SETTINGS } from '../db/defaults'
@@ -21,4 +22,16 @@ export function useWeek(date: string, today: string): WeekSummary | undefined {
     return { entries, overrides }
   }, [days[0]])
   return data ? summarizeWeek(date, data.entries, data.overrides, settings, today) : undefined
+}
+
+/** Re-reads the time every minute so the hello and its colour follow the time of day. */
+export function useNow(): Date {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000)
+    const vis = () => setNow(new Date())
+    document.addEventListener('visibilitychange', vis)
+    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', vis) }
+  }, [])
+  return now
 }

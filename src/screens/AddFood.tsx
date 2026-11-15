@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import { deleteEntry, logFood, logQuick, saveFood } from '../db/repo'
 import type { Food, FoodCategory, Macros, Unit } from '../db/types'
-import { defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
+import { autoKcal, defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
 import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type AiMeal, type MealItem } from '../logic/meal'
 import { formatDay } from '../logic/dates'
 import { askMeal, askPhoto, photoToBase64, type AiFood, type PhotoEvent, type PhotoKind } from '../logic/ai'
@@ -762,7 +762,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate }: { draft
             <div className="grid4 add-edit-grid">
               {(['kcal', 'protein', 'carbs', 'fat'] as const).map((key) => (
                 <label key={key}>{key === 'kcal' ? 'kcal' : key[0].toUpperCase() + key.slice(1)}
-                  <input type="number" inputMode="decimal" step="any" min="0" value={vals[key]} placeholder="0" onChange={(e) => { setVals({ ...vals, [key]: e.target.value }); setError('') }} />
+                  <input type="number" inputMode="decimal" step="any" min="0" value={vals[key]} placeholder="0" onChange={(e) => { setVals(key === 'kcal' ? { ...vals, kcal: e.target.value } : { ...vals, [key]: e.target.value, kcal: autoKcal({ ...vals, [key]: e.target.value }) }); setError('') }} />
                 </label>
               ))}
             </div>

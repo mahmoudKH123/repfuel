@@ -1,5 +1,5 @@
 import { db, type RepFuelDB } from './db'
-import type { DayOverride, Entry, Food, SettingRow, WeightLog } from './types'
+import type { DayOverride, Entry, Food, SettingRow, WaterLog, WeightLog } from './types'
 
 export const BACKUP_APP = 'repfuel'
 export const BACKUP_SCHEMA = 1
@@ -14,6 +14,8 @@ export interface Backup {
   weights: WeightLog[]
   settings: SettingRow[]
   meta: { key: string; value: number }[]
+  /** Added later; older backups don't have it. */
+  water?: WaterLog[]
 }
 
 export async function exportBackup(database: RepFuelDB = db): Promise<Backup> {
@@ -27,6 +29,7 @@ export async function exportBackup(database: RepFuelDB = db): Promise<Backup> {
     weights: await database.weights.toArray(),
     settings: await database.settings.toArray(),
     meta: await database.meta.toArray(),
+    water: await database.water.toArray(),
   }))
 }
 
@@ -56,5 +59,6 @@ export async function restoreBackup(backup: Backup, database: RepFuelDB = db): P
     await database.weights.bulkPut(backup.weights)
     await database.settings.bulkPut(backup.settings)
     await database.meta.bulkPut(backup.meta)
+    if (Array.isArray(backup.water)) await database.water.bulkPut(backup.water)
   })
 }

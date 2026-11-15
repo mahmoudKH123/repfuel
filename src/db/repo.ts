@@ -207,3 +207,21 @@ export async function reorderDay(id: string, exerciseIds: string[]): Promise<voi
 export async function renamePlanDay(id: string, name: string, short: string): Promise<void> {
   await db.plan.update(id, { name, short })
 }
+
+/** Adds a drink (ml) to a day's water. */
+export async function addWater(date: string, ml: number): Promise<void> {
+  await db.transaction('rw', db.water, async () => {
+    const have = await db.water.get(date)
+    await db.water.put({ date, ml: (have?.ml ?? 0) + ml, sips: [...(have?.sips ?? []), ml] })
+  })
+}
+
+/** Takes back the last drink added on a day. */
+export async function undoWater(date: string): Promise<void> {
+  await db.transaction('rw', db.water, async () => {
+    const have = await db.water.get(date)
+    if (!have?.sips.length) return
+    const last = have.sips[have.sips.length - 1]
+    await db.water.put({ date, ml: Math.max(0, have.ml - last), sips: have.sips.slice(0, -1) })
+  })
+}

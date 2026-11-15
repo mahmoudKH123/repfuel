@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import type { DayOverride, Entry, Exercise, Food, PlanDay, SettingRow, TrainSession, WeekPlan, WeightLog } from './types'
+import type { DayOverride, Entry, Exercise, Food, PlanDay, SettingRow, TrainSession, WaterLog, WeekPlan, WeightLog } from './types'
 import { SEED_EXERCISES, SEED_PLAN } from './workoutSeed'
 import { REMOVED_SEED_KEYS, SEED_FOODS, SEED_VERSION } from './seedFoods'
 import { DEFAULT_SETTINGS } from './defaults'
@@ -15,6 +15,7 @@ export class RepFuelDB extends Dexie {
   plan!: EntityTable<PlanDay, 'id'>
   sessions!: EntityTable<TrainSession, 'date'>
   weeks!: EntityTable<WeekPlan, 'week'>
+  water!: EntityTable<WaterLog, 'date'>
 
   constructor(name = 'repfuel') {
     super(name)
@@ -34,6 +35,8 @@ export class RepFuelDB extends Dexie {
       sessions: 'date',
       weeks: 'week',
     })
+    // v3: water drunk per day. Adds a table only; nothing existing changes.
+    this.version(3).stores({ water: 'date' })
   }
 }
 

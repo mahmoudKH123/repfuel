@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { Exercise, PlanDay, WeekPlan, WeightUnit } from '../db/types'
-import { addExerciseToDay, ensureWeek, removeExerciseFromDay, saveExercise, saveWeek, toggleExerciseDone } from '../db/repo'
+import { addExerciseToDay, ensureWeek, getSettings, removeExerciseFromDay, saveExercise, saveWeek, toggleExerciseDone } from '../db/repo'
 import { addDays, formatDay } from '../logic/dates'
 import { applyWeights, cancelAttempt, fmtWeight, recordAttempt, startAttempt, volumeKg } from '../logic/train'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, findFrom, missedDays, mondayOf, reshuffle, type Reshuffle } from '../logic/schedule'
@@ -104,10 +104,14 @@ export function Train({ today }: { today: string }) {
     }, today)
     setShuffleKey((k) => k + 1)
   }
+  /** Straight back to the normal week (Settings, else the default), no questions: days already trained stay,
+   *  past days that weren't trained are just left as missed (not re-fitted), today onwards is the normal plan. */
   const resetWeek = async () => {
-    const base = { ...wp, days: [...DEFAULT_WEEK], blocked: [], dropped: [], missed: [], declined: false }
-    const keepPast = base.days.map((x, i) => (i < from ? (trained.get(i) ?? x) : x))
-    await saveWeek({ ...base, days: keepPast }, today)
+    const normal = (await getSettings()).trainingWeek ?? DEFAULT_WEEK
+    const d = normal.map((x, i) => (i < from ? (trained.get(i) ?? x) : x))
+    const missed = d.flatMap((x, i) => (i < ti && x !== 'rest' && !trained.has(i) ? [i] : []))
+    const owed = d.filter((x, i) => x !== 'rest' && i >= from)
+    await saveWeek({ ...wp, days: d, owed, blocked: [], dropped: [], missed, declined: false }, today)
     setShuffleKey((k) => k + 1)
     setToast('Back to your normal week')
   }
