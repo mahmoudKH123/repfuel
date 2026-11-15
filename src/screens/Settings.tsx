@@ -17,6 +17,7 @@ import { searchByName } from '../logic/search'
 import { useSettings } from '../ui/hooks'
 import { useCountUp } from '../ui/motion'
 import { WeightDial } from '../ui/WeightDial'
+import { Avatar, AvatarSheet } from '../ui/Avatar'
 import type { ThemeMode } from '../ui/theme'
 
 type PanelId = 'targets' | 'training' | 'weight' | 'ai' | 'look' | 'backup'
@@ -44,6 +45,7 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
   const sessions = useLiveQuery(() => db.sessions.where('date').between(week, addDays(week, 6), true, true).toArray(), [week]) ?? []
   const plan = useLiveQuery(() => db.plan.orderBy('order').toArray(), []) ?? []
   const [open, setOpen] = useState<{ id: PanelId; origin: Origin } | null>(null)
+  const [picking, setPicking] = useState(false)
 
   const type = dayType(today, overrides, settings)
   const eaten = sum(entries).kcal
@@ -74,7 +76,7 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
       </header>
 
       <ProfileCard
-        name={settings.name || 'Mahmoud'}
+        name={settings.name || 'Mahmoud'} avatar={settings.avatar} onAvatar={() => setPicking(true)}
         kg={latest?.kg} delta={delta} spark={weights.slice(-12).map((w) => w.kg)}
         eaten={eaten} target={target}
         trainDays={trainDays.map((x) => ({ done: doneIdx.has(x.i), today: x.i === ti, past: x.i < ti && x.i >= startIdx }))}
@@ -108,13 +110,20 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
       <div className="td-list st-rows">
         <Row tone="look" delay={5} onOpen={openPanel('look')}
           icon={<><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5v17A8.5 8.5 0 0 0 12 3.5z" fill="currentColor" /></>}
-          title="Look" sub="Theme and greeting name" value={themeMode === 'auto' ? 'Auto' : themeMode === 'dark' ? 'Dark' : 'Light'} />
+          title="Look" sub="Theme" value={themeMode === 'auto' ? 'Auto' : themeMode === 'dark' ? 'Dark' : 'Light'} />
         <Row tone="teal" delay={6} onOpen={openPanel('backup')}
           icon={<path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 8.5a4 4 0 0 1-.5 9.5M12 12v8M9 17l3 3 3-3" />}
           title="Backup" sub="Export or restore your data" />
       </div>
       <p className="st-foot">RepFuel · your data stays on this phone</p>
 
+      {picking && (
+        <AvatarSheet
+          value={settings.avatar} name={settings.name || 'Mahmoud'} onClose={() => setPicking(false)}
+          onPick={(avatar) => { void saveSettings({ ...settings, avatar }) }}
+          onName={(name) => { void saveSettings({ ...settings, name }) }}
+        />
+      )}
       {open && (
         <Panel
           origin={open.origin} tone={TONES[open.id]} title={TITLES[open.id]}
@@ -124,7 +133,7 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
           {open.id === 'weight' && <WeightPanel today={today} settings={settings} />}
           {open.id === 'training' && <TrainingPanel today={today} settings={settings} plan={plan} />}
           {open.id === 'ai' && <AiPanel />}
-          {open.id === 'look' && <LookPanel settings={settings} mode={themeMode} onMode={onThemeMode} />}
+          {open.id === 'look' && <LookPanel mode={themeMode} onMode={onThemeMode} />}
           {open.id === 'backup' && <BackupPanel />}
         </Panel>
       )}
@@ -137,8 +146,8 @@ const TITLES: Record<PanelId, string> = { targets: 'Targets', training: 'Trainin
 
 /* ---------- Profile card ---------- */
 
-function ProfileCard({ name, kg, delta, spark, eaten, target, trainDays }: {
-  name: string; kg?: number; delta: number | null; spark: number[]; eaten: number; target: number
+function ProfileCard({ name, avatar, onAvatar, kg, delta, spark, eaten, target, trainDays }: {
+  name: string; avatar?: string; onAvatar: () => void; kg?: number; delta: number | null; spark: number[]; eaten: number; target: number
   trainDays: { done: boolean; today: boolean; past: boolean }[]
 }) {
   const ratio = target ? Math.min(1, eaten / target) : 0
@@ -147,9 +156,14 @@ function ProfileCard({ name, kg, delta, spark, eaten, target, trainDays }: {
   const R = 21, C = 2 * Math.PI * R
   return (
     <div className="st-profile">
-      <div className="st-avatar" aria-hidden>{name.trim()[0]?.toUpperCase() ?? 'M'}</div>
+      <button className="st-avatar" onClick={onAvatar} aria-label="Edit name and picture">
+        <Avatar value={avatar} name={name} size={52} />
+        <span className="st-avatar-edit" aria-hidden>
+          <svg width="11" height="11" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
+        </span>
+      </button>
       <div className="st-who">
-        <strong>{name}</strong>
+        <button className="st-name" onClick={onAvatar}>{name}</button>
         <span>{kg ? <>{fmtWeight(kg)} kg{delta !== null && <i className={delta > 0 ? 'up' : delta < 0 ? 'down' : ''}>{delta > 0 ? '▲' : delta < 0 ? '▼' : '•'} {Math.abs(delta)}</i>}</> : 'No weigh-ins yet'}</span>
       </div>
       <Spark values={spark} />
@@ -343,13 +357,6 @@ function TargetsPanel({ settings }: { settings: SettingsT }) {
       </p>
 
       <div className="st-row">
-        <span>Reference weight</span>
-        <span className="st-inline">
-          <input inputMode="decimal" value={draft.referenceWeightKg} onChange={(e) => { setDraft({ ...draft, referenceWeightKg: Number(e.target.value) || 0 }); setSaved(false) }} aria-label="Reference weight kg" /> kg
-        </span>
-      </div>
-
-      <div className="st-row">
         <span>Water a day</span>
         <span className="st-inline">
           <input
@@ -361,6 +368,13 @@ function TargetsPanel({ settings }: { settings: SettingsT }) {
               if (l > 0) { setDraft({ ...draft, waterGoalMl: Math.round(Math.min(10, l) * 1000) }); setSaved(false) }
             }}
           /> L
+        </span>
+      </div>
+
+      <div className="st-row">
+        <span>Reference weight</span>
+        <span className="st-inline">
+          <input inputMode="decimal" value={draft.referenceWeightKg} onChange={(e) => { setDraft({ ...draft, referenceWeightKg: Number(e.target.value) || 0 }); setSaved(false) }} aria-label="Reference weight kg" /> kg
         </span>
       </div>
 
@@ -783,9 +797,7 @@ function AiPanel() {
 
 /* ---------- Look ---------- */
 
-function LookPanel({ settings, mode, onMode }: { settings: SettingsT; mode: ThemeMode; onMode: (m: ThemeMode) => void }) {
-  const [name, setName] = useState(settings.name ?? 'Mahmoud')
-  const [saved, setSaved] = useState(false)
+function LookPanel({ mode, onMode }: { mode: ThemeMode; onMode: (m: ThemeMode) => void }) {
   const opts: { id: ThemeMode; label: string }[] = [{ id: 'auto', label: 'Auto' }, { id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }]
   return (
     <div className="st-look">
@@ -801,12 +813,6 @@ function LookPanel({ settings, mode, onMode }: { settings: SettingsT; mode: Them
         ))}
       </div>
       <p className="st-note">Auto follows your iPhone. Tapping the logo also switches.</p>
-
-      <h3 className="st-h">Greeting</h3>
-      <form className="st-pass" onSubmit={async (e) => { e.preventDefault(); if (name.trim()) { await saveSettings({ ...settings, name: name.trim() }); setSaved(true) } }}>
-        <input value={name} onChange={(e) => { setName(e.target.value); setSaved(false) }} aria-label="Your name" />
-        <button type="submit">{saved ? 'Saved' : 'Save'}</button>
-      </form>
     </div>
   )
 }

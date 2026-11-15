@@ -63,6 +63,8 @@ export interface Settings {
   trainingWeek?: string[]
   /** Water to drink a day, in ml (4 L if never set). */
   waterGoalMl?: number
+  /** Profile picture: a photo (data URL) or a built-in avatar id; the initial shows when unset. */
+  avatar?: string
 }
 
 export interface SettingRow {

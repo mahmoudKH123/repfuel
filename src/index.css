@@ -1084,12 +1084,43 @@ button.meal-unit { color: var(--kcal); }
   display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 14px; padding: 20px 0 6px;
   animation: rise 0.4s var(--ease) both;
 }
-.st-avatar {
-  width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font-size: 21px; font-weight: 700; color: #fff;
-  background: linear-gradient(135deg, var(--kcal), color-mix(in srgb, var(--kcal) 55%, var(--protein))); animation: pop 0.4s var(--ease) 0.1s both;
+.st-avatar { position: relative; width: 52px; height: 52px; padding: 0; border-radius: 50%; background: none; animation: pop 0.4s var(--ease) 0.1s both; }
+.st-avatar:active .av { transform: scale(0.94); }
+.st-avatar-edit {
+  position: absolute; right: -2px; bottom: -2px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--solid); color: var(--text); box-shadow: 0 0 0 2px var(--bg), 0 1px 3px rgba(0, 0, 0, 0.18);
 }
+.st-avatar-edit svg { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; }
+
+/* Profile picture: photo, built-in avatar or initial (same circle everywhere) */
+.av { display: grid; place-items: center; flex: none; border-radius: 50%; object-fit: cover; transition: transform 0.15s var(--ease); }
+.av-letter { font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--kcal), color-mix(in srgb, var(--kcal) 55%, var(--protein))); }
+.av-icon { color: #fff; background: linear-gradient(135deg, var(--tc), color-mix(in srgb, var(--tc) 70%, #000)); }
+.av-icon svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.av-now { display: flex; justify-content: center; margin: 2px 0 16px; }
+.av-now .av { animation: pop 0.35s var(--ease) both; }
+.av-name {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 0 0 0 16px; border-radius: 14px; background: var(--card2);
+}
+.av-name span { font-size: 15px; font-weight: 600; color: var(--text2); }
+.av-name input {
+  flex: 1; min-width: 0; padding: 13px 16px 13px 0; border: 0; background: none; color: var(--text);
+  font: inherit; font-size: 16px; font-weight: 600; text-align: right; outline: none;
+}
+.av-photo {
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 13px; border-radius: 14px;
+  font-size: 16px; font-weight: 600; color: var(--kcal); background: color-mix(in srgb, var(--kcal) 13%, var(--card2));
+}
+.av-photo svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.av-error { margin: 8px 4px 0; font-size: 13px; color: var(--fat); text-align: center; }
+.av-or { margin: 18px 0 10px; font-size: 13px; font-weight: 600; color: var(--text2); text-align: center; }
+.av-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; justify-items: center; }
+.av-opt { padding: 3px; border-radius: 50%; background: none; animation: pop 0.3s var(--ease) both; }
+.av-opt.on { box-shadow: 0 0 0 2.5px var(--text); }
+.wd-actions.one { grid-template-columns: 1fr; }
 .st-who { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
-.st-who strong { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+.st-who strong, .st-name { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+.st-name { align-self: flex-start; max-width: 100%; padding: 0; background: none; color: var(--text); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-who span { font-size: 13px; font-weight: 600; color: var(--text2); font-variant-numeric: tabular-nums; }
 .st-who i { font-style: normal; margin-left: 6px; font-size: 12px; }
 .st-who i.down { color: var(--kcal); } .st-who i.up { color: var(--carbs); }
