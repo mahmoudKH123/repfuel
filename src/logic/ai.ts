@@ -1,10 +1,17 @@
 import type { Macros, Unit } from '../db/types'
 import type { AiMeal } from './meal'
 
-/** The RepFuel AI Worker (Cloudflare). If empty, dev builds use a fake reply. */
-export const AI_URL = 'https://repfuel-ai.repfuel-app.workers.dev'
+/**
+ * The RepFuel AI server, same code on two hosts: Cloudflare first, Vercel as the backup when one is blocked
+ * (workers.dev was blocked in Egypt on 15/11/2026). If empty, dev builds use a fake reply.
+ */
+export const AI_URLS: string[] = [
+  'https://repfuel-ai.repfuel-app.workers.dev',
+  'https://repfuel-ai.vercel.app/api/ai',
+]
 
 const PASS_KEY = 'rf-ai-pass'
+const SERVER_KEY = 'rf-ai-server'
 
 export interface AiFood extends Macros {
   name: string
@@ -29,27 +36,71 @@ export function setPass(v: string): void {
   } catch { /* storage blocked: passcode just won't be remembered */ }
 }
 
-const isMock = () => !AI_URL && import.meta.env.DEV
+const isMock = () => !AI_URLS.length && import.meta.env.DEV
+
+const OFFLINE = 'Could not reach the AI. You may be offline. Check your internet and try again.'
+
+/** The server that answered last time (remembered), so most calls go straight to it. */
+let chosen: string | null = (() => {
+  try { const v = localStorage.getItem(SERVER_KEY); return v && AI_URLS.includes(v) ? v : null } catch { return null }
+})()
+
+/** Resolves with the URL if the server answers at all. A blocked host never answers (the connection just hangs), so it gives up after 5 s. */
+const ping = (u: string) => fetch(u, { method: 'GET', mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(5_000) }).then(() => u)
+
+/** Finds a server that can be reached: pings all at once and takes the first that answers. */
+async function pickServer(avoid?: string): Promise<string> {
+  const urls = AI_URLS.filter((u) => u !== avoid)
+  try {
+    chosen = await Promise.any(urls.map(ping))
+  } catch {
+    throw new Error(OFFLINE)
+  }
+  try { localStorage.setItem(SERVER_KEY, chosen) } catch { /* just won't be remembered */ }
+  return chosen
+}
+
+/**
+ * POSTs to the AI server. Uses the remembered one; if it can't be reached, finds one that can and tries once more.
+ * Only connection failures switch servers: an answer from the server (even an error) is final.
+ */
+async function send(body: string, pass: string): Promise<Response> {
+  const go = (url: string) => fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-RepFuel-Pass': pass },
+    body,
+    signal: AbortSignal.timeout(60_000),
+  })
+  // A blocked host doesn't fail, it hangs (45 s+ seen), so check the remembered one answers before sending.
+  let url = chosen ? await ping(chosen).catch(() => null) : null
+  url ??= await pickServer(chosen ?? undefined)
+  try {
+    return await go(url)
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('AI took too long. Try again, or add it by hand.')
+    // Can't connect: maybe this host got blocked. Try another one that answers.
+    const failed = url
+    chosen = null
+    url = await pickServer(AI_URLS.length > 1 ? failed : undefined)
+    try {
+      return await go(url)
+    } catch (e2) {
+      if (e2 instanceof DOMException && e2.name === 'TimeoutError') throw new Error('AI took too long. Try again, or add it by hand.')
+      chosen = null
+      throw new Error(OFFLINE)
+    }
+  }
+}
 
 type AiRequest =
   | { mode: 'meal'; text: string; foods: string }
+  | { mode: 'search'; text: string; foods: string; fix?: string; current?: string }
 
 async function post(req: AiRequest): Promise<Record<string, unknown>> {
-  if (!AI_URL) throw new Error('AI is not set up yet.')
+  if (!AI_URLS.length) throw new Error('AI is not set up yet.')
   const pass = getPass()
   if (!pass) throw new Error('Enter your AI passcode in Settings → AI first.')
-  let res: Response
-  try {
-    res = await fetch(AI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-RepFuel-Pass': pass },
-      body: JSON.stringify(req),
-      signal: AbortSignal.timeout(60_000),
-    })
-  } catch (e) {
-    if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('AI took too long. Try again, or add it by hand.')
-    throw new Error('Could not reach the AI. You may be offline. Check your internet and try again.')
-  }
+  const res = await send(JSON.stringify(req), pass)
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error ?? `AI error (${res.status}).`)
   return data
@@ -59,6 +110,18 @@ async function post(req: AiRequest): Promise<Record<string, unknown>> {
 export async function askMeal(text: string, foods: string): Promise<AiMeal> {
   if (isMock()) return mockMeal(text)
   const data = await post({ mode: 'meal', text, foods })
+  const meal = data.meal as AiMeal | undefined
+  if (!meal?.items?.length) throw new Error('AI found no food in that. Try describing it differently.')
+  return meal
+}
+
+/**
+ * Like askMeal, but the Worker first searches the web for the items (real numbers when found, high-end estimate when not).
+ * With `fix`, the AI corrects the current result (`current` = what the screen shows now) instead of starting over.
+ */
+export async function askSearch(text: string, foods: string, fix?: { text: string; current: string }): Promise<AiMeal> {
+  if (isMock()) return mockMeal(text, fix?.text)
+  const data = await post({ mode: 'search', text, foods, ...(fix ? { fix: fix.text, current: fix.current } : {}) })
   const meal = data.meal as AiMeal | undefined
   if (!meal?.items?.length) throw new Error('AI found no food in that. Try describing it differently.')
   return meal
@@ -79,21 +142,10 @@ export type PhotoResult = { kind: 'label'; food: AiFood } | { kind: 'food'; meal
 /** Any photo: the AI decides if it is a nutrition label, food, or neither, and reports each step as it goes. */
 export async function askPhoto(img: { image: string; mimeType: string }, foods: string, onEvent: (e: PhotoEvent) => void): Promise<PhotoResult> {
   if (isMock()) return mockPhoto(onEvent)
-  if (!AI_URL) throw new Error('AI is not set up yet.')
+  if (!AI_URLS.length) throw new Error('AI is not set up yet.')
   const pass = getPass()
   if (!pass) throw new Error('Enter your AI passcode in Settings → AI first.')
-  let res: Response
-  try {
-    res = await fetch(AI_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-RepFuel-Pass': pass },
-      body: JSON.stringify({ mode: 'photo', ...img, foods }),
-      signal: AbortSignal.timeout(60_000),
-    })
-  } catch (e) {
-    if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('AI took too long. Try again, or add it by hand.')
-    throw new Error('Could not reach the AI. You may be offline. Check your internet and try again.')
-  }
+  const res = await send(JSON.stringify({ mode: 'photo', ...img, foods }), pass)
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.error ?? `AI error (${res.status}).`)
@@ -143,10 +195,12 @@ export async function photoToBase64(file: File): Promise<{ image: string; mimeTy
   return { image: url.slice(url.indexOf(',') + 1), mimeType: 'image/jpeg' }
 }
 
-async function mockMeal(text: string): Promise<AiMeal> {
+async function mockMeal(text: string, fix?: string): Promise<AiMeal> {
   await new Promise((r) => setTimeout(r, 900))
   const base = { matchId: 0, amount: 0, liquid: false, confidence: 'medium' as const, note: '' }
-  if (!/,| and /i.test(text)) return { name: 'Koshary (dev sample)', items: [{ ...base, name: 'Koshary, medium (dev sample)', eatenGrams: 450, servingLabel: '1 medium plate', gramsPerServing: 450, kcal: 780, protein: 24, carbs: 135, fat: 16, note: 'Assumed fried onions and oil in sauce.' }] }
+  // Dev sample of a fix: "large" makes the koshary bigger, so the screen visibly updates in place.
+  const big = fix && /large|big|كبير/i.test(fix) ? 1.4 : 1
+  if (!/,| and /i.test(text)) return { name: 'Koshary (dev sample)', items: [{ ...base, name: `Koshary, ${big > 1 ? 'large' : 'medium'} (dev sample)`, eatenGrams: Math.round(450 * big), servingLabel: '1 plate', gramsPerServing: Math.round(450 * big), kcal: Math.round(780 * big), protein: Math.round(24 * big), carbs: Math.round(135 * big), fat: Math.round(16 * big), note: big > 1 ? 'Changed to large as you said.' : 'Abou Tarek medium bowl.', source: 'fatsecret.com' }] }
   return {
     name: 'Breakfast (dev sample)',
     items: [

@@ -1524,3 +1524,14 @@ button.meal-unit { color: var(--kcal); }
 .wk-row:active, .add-card > button:active, .st-row-btn:active { transition: background-color 0s linear 0.09s; }
 :root.scrolling .wk-row:active, :root.scrolling .add-card > button:active, :root.scrolling .st-row-btn:active { background: transparent; transition: none; }
 :root.scrolling button:active { transform: none; opacity: 1; }
+
+/* Fix box: correct an AI result in place */
+.add-fix { padding: 12px 14px 14px; margin-top: 14px; }
+.add-fix-label { display: block; font-size: 13px; font-weight: 600; color: var(--text2); margin: 0 2px 8px; }
+.add-fix-row { display: flex; gap: 8px; }
+.add-fix-row input { flex: 1; min-width: 0; padding: 10px 12px; }
+.add-fix-go { flex: none; background: var(--brand); color: #fff; font-weight: 600; }
+.add-fix-go:disabled { opacity: 0.4; }
+.add-fix .add-progress { width: 100%; margin-top: 10px; }
+.add-fix .warn { margin: 8px 2px 0; font-size: 13px; }
+.add-fix.busy input { opacity: 0.6; }

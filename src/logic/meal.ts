@@ -18,6 +18,8 @@ export interface AiMealItem extends Macros {
   statedWeight?: boolean
   confidence: 'high' | 'medium' | 'low'
   note: string
+  /** Site the numbers came from (web search), or empty when the AI estimated. */
+  source?: string
 }
 
 export interface AiMeal {
@@ -44,6 +46,8 @@ export interface MealItem {
   estimate: boolean
   confidence: 'high' | 'medium' | 'low'
   note: string
+  /** Site the AI took the numbers from, when it found the item online. */
+  source?: string
 }
 
 /** Serving weight for saved foods: from the label ("1 scoop, 36g"), or the base amount for gram/ml foods. */
@@ -97,7 +101,9 @@ export function buildItems(meal: AiMeal, foods: Food[]): MealItem[] {
       }
     }
     const base = { kcal: i.kcal, protein: i.protein, carbs: i.carbs, fat: i.fat }
-    const common = { key: `${n}-ai`, name: i.name, base, servingLabel: i.servingLabel || '1 serving', liquid: i.liquid, on: true, save: false, estimate: true, confidence: i.confidence, note: i.note }
+    const source = i.source?.trim() || undefined
+    // Found online = real numbers, not an estimate.
+    const common = { key: `${n}-ai`, name: i.name, base, servingLabel: i.servingLabel || '1 serving', liquid: i.liquid, on: true, save: false, estimate: !source, confidence: i.confidence, note: i.note, source }
     // No weight: the numbers are taken as one serving.
     if (!(i.eatenGrams > 0)) return { ...common, baseAmount: 1, baseUnit: 'serving' as Unit, unit: 'serving' as AmountUnit, amount: 1 }
     const w: 'g' | 'ml' = i.liquid ? 'ml' : 'g'
@@ -129,7 +135,7 @@ export function cycleUnit(i: MealItem): Pick<MealItem, 'unit' | 'amount'> {
 
 /** A new AI item as a saved food: per 100 g/ml (or per serving when there is no weight), serving weight kept in the label. */
 export function toFood(i: MealItem): Omit<Food, 'createdAt' | 'updatedAt'> {
-  const common = { name: i.name.trim(), category: 'custom' as const, estimate: true, note: i.note || undefined }
+  const common = { name: i.name.trim(), category: 'custom' as const, estimate: i.estimate, note: [i.source ? `From ${i.source}.` : '', i.note].filter(Boolean).join(' ') || undefined }
   if (i.baseUnit === 'serving') return { ...common, baseAmount: 1, unit: 'serving', servingLabel: i.servingLabel, ...i.base }
   const per100 = scaleFood({ ...i.base, baseAmount: i.baseAmount }, 100)
   const r = (n: number) => Math.round(n * 10) / 10

@@ -7,7 +7,7 @@ import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { autoKcal, defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
 import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type AiMeal, type MealItem } from '../logic/meal'
 import { formatDay } from '../logic/dates'
-import { askMeal, askPhoto, photoToBase64, type AiFood, type PhotoEvent, type PhotoKind } from '../logic/ai'
+import { askPhoto, askSearch, photoToBase64, type AiFood, type PhotoEvent, type PhotoKind } from '../logic/ai'
 import { searchByName } from '../logic/search'
 import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
@@ -41,7 +41,12 @@ interface Draft extends Macros {
   liquid?: boolean
   /** Unit the amount box opens in, when it differs from `unit` (e.g. AI eggs: macros per g, shown as pieces). */
   initialUnit?: AmountUnit
+  /** Site the AI found the numbers on (web search). */
+  web?: string
 }
+
+/** A typed AI result: the words you typed, and how many times it was fixed (so the screen refreshes in place). */
+interface AiCtx { text: string; rev: number }
 
 /** Live state of a photo being analysed: how many steps are done and what the AI has said so far. */
 interface PhotoRun {
@@ -54,7 +59,7 @@ interface PhotoRun {
   retried?: boolean
 }
 
-type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string } | PhotoRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft } | { kind: 'meal'; name: string; items: MealItem[] }
+type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string } | PhotoRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft; ai?: AiCtx } | { kind: 'meal'; name: string; items: MealItem[]; ai?: AiCtx }
 
 export function AddFood({ date, today, onClose }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
@@ -134,34 +139,40 @@ export function AddFood({ date, today, onClose }: Props) {
     draft: { source, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel, amount: f.defaultAmount, estimate: source === 'ai', confidence: f.confidence, note: f.note, gramsPerServing: f.gramsPerServing, liquid: f.liquid, kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat },
   })
 
-  // Described food or meal: the AI splits it into items. One item opens the normal detail; more open the meal list.
+  // Described food or meal: the AI searches the web, then splits it into items. One item opens the normal detail; more open the meal list.
   const runMeal = async (text: string) => {
     setError('')
-    setView({ kind: 'busy', label: 'Estimating…' })
+    setView({ kind: 'busy', label: 'Searching the web…' })
     try {
-      showMeal(await askMeal(text, foodsContext(foods)))
+      showMeal(await askSearch(text, foodsContext(foods)), { text, rev: 0 })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong.')
       setView({ kind: 'home' })
     }
   }
 
-  const showMeal = (meal: AiMeal) => {
+  // "It was 3 eggs, no oil": the AI corrects what the screen shows now, and the same screen updates. Errors show in the fix box.
+  const fixMeal = async (ai: AiCtx, correction: string, current: string) => {
+    const meal = await askSearch(ai.text, foodsContext(foods), { text: correction, current })
+    showMeal(meal, { text: ai.text, rev: ai.rev + 1 })
+  }
+
+  const showMeal = (meal: AiMeal, ai?: AiCtx) => {
     const items = buildItems(meal, foods)
     if (items.length === 1) {
       const i = items[0]
       if (i.food) {
         const f = i.food
-        setView({ kind: 'detail', draft: { source: 'saved', food: f, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel ?? fmtAmount(f.baseAmount, f.unit), amount: i.amount, initialUnit: i.unit, estimate: f.estimate, ...labelGrams(f), kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat } })
+        setView({ kind: 'detail', ai, draft: { source: 'saved', food: f, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel ?? fmtAmount(f.baseAmount, f.unit), amount: i.amount, initialUnit: i.unit, estimate: f.estimate, ...labelGrams(f), kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat } })
       } else {
         // Countable (egg, banana): numbers per piece so the page says "eggs"; otherwise per the weight eaten.
         const perPiece = i.baseUnit !== 'serving' && i.gramsPerServing
         const base = perPiece ? round1All(scaleFood({ ...i.base, baseAmount: i.baseAmount }, i.gramsPerServing!)) : i.base
-        setView({ kind: 'detail', draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: true, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, ...base } })
+        setView({ kind: 'detail', ai, draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: i.estimate, web: i.source, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, ...base } })
       }
       return
     }
-    setView({ kind: 'meal', name: meal.name, items })
+    setView({ kind: 'meal', name: meal.name, items, ai })
   }
 
   // Any photo: the AI decides label / food / nothing, and each step it reports updates the screen as it happens.
@@ -306,7 +317,7 @@ export function AddFood({ date, today, onClose }: Props) {
                   </span>
                   <span className="add-card-text">
                     <strong>Estimate “{query.trim()}”</strong>
-                    <small>AI estimate, splits a meal into items</small>
+                    <small>AI searches the web, splits a meal into items</small>
                   </span>
                 </button>
               </li>
@@ -346,7 +357,7 @@ export function AddFood({ date, today, onClose }: Props) {
 
       {view.kind === 'detail' && (
         <Detail
-          key={view.draft.name + view.draft.source} draft={view.draft} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
+          key={view.draft.name + view.draft.source + (view.ai?.rev ?? '')} draft={view.draft} onFix={view.ai ? (c, cur) => fixMeal(view.ai!, c, cur) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
           toPlate={plate.length && view.draft.food ? (amount, from) => {
             // Building a plate: the chosen amount goes on it (or updates it) instead of logging straight away.
             const id = view.draft.food!.id!
@@ -357,7 +368,7 @@ export function AddFood({ date, today, onClose }: Props) {
       )}
 
       {view.kind === 'meal' && (
-        <Meal name={view.name} initial={view.items} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
+        <Meal key={view.ai?.rev ?? 0} name={view.name} initial={view.items} onFix={view.ai ? (c, cur) => fixMeal(view.ai!, c, cur) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
       )}
 
       {view.kind === 'home' && plateItems.length > 0 && (
@@ -602,7 +613,9 @@ const MAC = [
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ] as const
 
-function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate }: { draft: Draft; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onEdit?: () => void; toPlate?: (amount: number, from: Element) => void }) {
+type OnFix = (correction: string, current: string) => Promise<void>
+
+function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: { draft: Draft; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onEdit?: () => void; toPlate?: (amount: number, from: Element) => void; onFix?: OnFix }) {
   const editable = draft.source !== 'saved'
   const [name, setName] = useState(draft.name)
   const [vals, setVals] = useState({ kcal: num(draft.kcal), protein: num(draft.protein), carbs: num(draft.carbs), fat: num(draft.fat) })
@@ -692,6 +705,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate }: { draft
           {draft.confidence && <span className={`tag${draft.confidence === 'low' ? ' warn' : ''}`}>{draft.confidence} confidence</span>}
           {draft.estimate && <span className="tag">estimate</span>}
           {draft.source === 'label' && <span className="tag">from label</span>}
+          {draft.web && <span className="tag mine">from {draft.web}</span>}
         </p>
         {draft.note && <p className="muted add-note">{draft.note}</p>}
       </div>
@@ -779,6 +793,8 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate }: { draft
         </button>
       )}
 
+      {onFix && <FixBox onFix={(c) => onFix(c, `${name.trim() || draft.name}${draft.source === 'saved' ? ' (saved food)' : ''}${draft.web ? ` (from ${draft.web})` : ''}: ${fmtQty(amt, unit)} ${unitName(unit, noun, false, amt)} = ${macroText(portion)}`)} />}
+
       {error && <p className="warn add-error">{error}</p>}
       <Dock><button type="submit" form="add-form" className="primary add-go">{toPlate ? 'Put on plate' : 'Add'} {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button></Dock>
     </form>
@@ -812,7 +828,7 @@ function PortionRing({ kcal, eaten, target }: { kcal: number; eaten: number; tar
 }
 
 /** A described meal split into items: tick, adjust amounts, save new ones, log it all as one entry. */
-function Meal({ name: initialName, initial, eaten, target, date, onDone }: { name: string; initial: MealItem[]; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void }) {
+function Meal({ name: initialName, initial, eaten, target, date, onDone, onFix }: { name: string; initial: MealItem[]; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onFix?: OnFix }) {
   const [name, setName] = useState(initialName)
   const [items, setItems] = useState(initial)
   const [error, setError] = useState('')
@@ -855,6 +871,8 @@ function Meal({ name: initialName, initial, eaten, target, date, onDone }: { nam
         {items.map((i, n) => <MealRow key={i.key} item={i} index={n} onChange={(p) => set(i.key, p)} />)}
       </ul>
 
+      {onFix && <FixBox onFix={(c) => onFix(c, on.map((i) => `${i.name}${i.food ? ' (saved food)' : ''}${i.source ? ` (from ${i.source})` : ''}: ${fmtQty(i.amount, i.unit)} ${unitName(i.unit, servingNoun(i.servingLabel), false, i.amount)} = ${macroText(itemMacros(i))}`).join('\n'))} />}
+
       {error && <p className="warn add-error">{error}</p>}
       <Dock><button type="submit" form="add-form" className="primary add-go" disabled={busy}>Add meal {on.length ? `${k(totals.kcal)} kcal` : ''}</button></Dock>
     </form>
@@ -878,7 +896,7 @@ function MealRow({ item: i, index, onChange }: { item: MealItem; index: number; 
         <span className="meal-text">
           {i.food ? <strong>{i.name}</strong> : <input value={i.name} onChange={(e) => onChange({ name: e.target.value })} aria-label="Item name" />}
           <small>
-            {i.food ? <span className="tag mine">your food</span> : <span className={`tag${i.confidence === 'low' ? ' warn' : ''}`}>{i.confidence}</span>}
+            {i.food ? <span className="tag mine">your food</span> : i.source ? <span className="tag mine">{i.source}</span> : <span className={`tag${i.confidence === 'low' ? ' warn' : ''}`}>{i.confidence}</span>}
             {i.note || i.servingLabel}
           </small>
           <span className="add-ribbon" style={blend(m)} aria-hidden="true" />
@@ -935,7 +953,7 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
           <IconAi size={30} />
         </span>
         <h2>Describe your meal</h2>
-        <p className="muted">Say what and how much. A whole meal is fine, AI splits it into items.</p>
+        <p className="muted">Say what and how much. AI looks it up online and splits a meal into items.</p>
       </div>
       <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. Medium koshary from Abou Tarek" aria-label="Describe your meal" />
       <div className="add-examples">
@@ -945,6 +963,39 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
       </div>
       <button type="submit" className="primary add-go" disabled={!text.trim()}>Estimate</button>
     </form>
+  )
+}
+
+const macroText = (m: Macros) => `${Math.round(m.kcal)} kcal, P ${Math.round(m.protein)} g, C ${Math.round(m.carbs)} g, F ${Math.round(m.fat)} g`
+
+/** "Not quite right?": type a correction and the AI updates this same screen (no starting over). */
+function FixBox({ onFix }: { onFix: (text: string) => Promise<void> }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const go = async () => {
+    const t = text.trim()
+    if (!t || busy) return
+    setBusy(true)
+    setError('')
+    // On success the screen re-opens with the fixed numbers, so this box starts fresh.
+    try { await onFix(t) } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); setBusy(false) }
+  }
+  return (
+    <div className={`card add-fix${busy ? ' busy' : ''}`}>
+      <label className="add-fix-label" htmlFor="add-fix">Not quite right? Tell the AI</label>
+      <div className="add-fix-row">
+        <input
+          id="add-fix" value={text} disabled={busy} enterKeyHint="send" autoComplete="off" placeholder="e.g. it was 3 eggs, no oil"
+          onChange={(e) => { setText(e.target.value); setError('') }}
+          // Enter fixes; it must not submit the Add form around this box.
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); go() } }}
+        />
+        <button type="button" className="add-fix-go" disabled={!text.trim() || busy} onClick={go}>{busy ? 'Fixing…' : 'Fix'}</button>
+      </div>
+      {busy && <div className="add-progress"><span /></div>}
+      {error && <p className="warn">{error}</p>}
+    </div>
   )
 }
 

@@ -26,3 +26,6 @@ dist-ssr
 # Cloudflare Worker local files
 .wrangler
 .dev.vars
+
+# Vercel local link folder
+.vercel

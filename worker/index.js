@@ -1,11 +1,13 @@
 // RepFuel AI proxy (Cloudflare Worker).
 // Holds the Gemini key so it never reaches the browser. Two jobs:
 //   POST { mode: "text",  text }               -> estimate for one described food (kept for older app versions)
-//   POST { mode: "meal",  text, foods }        -> the meal split into items; `foods` = the user's saved foods, one per line
+//   POST { mode: "meal",  text, foods }        -> the meal split into items; `foods` = the user's saved foods, one per line (kept for older app versions)
+//   POST { mode: "search", text, foods, fix?, current? } -> like meal, but first searches the web (Tavily) for the items.
+//        fix = the user's correction ("it was 3 eggs, no oil"), current = the result as they have it now; only what the fix touches changes.
 //   POST { mode: "label", image, mimeType }    -> exact values read from a nutrition-facts photo (kept for older app versions)
 //   POST { mode: "photo", image, mimeType, foods } -> STREAMED (text/event-stream): the AI decides if the photo is a label,
 //        food, or neither, and the app sees each step live. Events: start, kind, seen, item, retry, done, error (see photoStream).
-// Reply: { food: {...}, model } for text/label, { meal: { name, note, items: [...] }, model } for meal
+// Reply: { food: {...}, model } for text/label, { meal: { name, note, items: [...] }, model } for meal and search
 
 const RULES_TEXT = `You estimate calories and macros for foods eaten by a gym-goer in Egypt.
 Rules:
@@ -169,6 +171,46 @@ const MEAL_SCHEMA = {
   required: ['mealName', 'items'],
 }
 
+const RULES_PLAN = `A gym-goer in Egypt wants to log what they ate. Write web search queries to find real nutrition facts for it.
+- One query per item worth looking up, at most 3, most important first. Skip items that clearly ARE one of the saved foods listed below.
+- Make each query specific: brand, restaurant or chain, size and the word "calories", e.g. "Abou Tarek koshary medium calories", "Juhayna full cream milk 1L nutrition facts".
+- Generic foods are fine too, e.g. "boiled egg large calories protein".
+- If a correction is given, search only for items the correction adds or changes (none if it only changes amounts).`
+
+const PLAN_SCHEMA = {
+  type: 'OBJECT',
+  properties: { queries: { type: 'ARRAY', items: { type: 'STRING' } } },
+  required: ['queries'],
+}
+
+const RULES_SEARCH = `${RULES_MEAL.replace(/- Be realistic:[^\n]*\n/, '')}
+Web results:
+- Live web search results are listed below. Use a result when it clearly matches the item (same product, brand, restaurant or dish, and a size you can convert). Prefer the brand or restaurant's own page, the pack label, and nutrition databases (USDA, FatSecret, Nutritionix, MyFitnessPal) over blogs.
+- If good sources disagree, use the HIGHER values (safer for calorie counting).
+- Convert the source's numbers to the amount actually eaten.
+- source: the short site name you used (e.g. "fatsecret.com"), or "" if no result matched.
+- No matching result and not a saved food: estimate at the HIGH end of a realistic range for that portion (safe for calorie counting, still believable), always count the cooking oil, butter, ghee or sauce, confidence at most "medium", and say "high-end estimate" in note.
+Corrections:
+- If a correction and the current result are given, apply the correction to the current result. Keep every item it does not touch exactly as it is (same name, amount and numbers). Change, add or remove only what the correction says.`
+
+const SEARCH_SCHEMA = {
+  ...MEAL_SCHEMA,
+  properties: {
+    ...MEAL_SCHEMA.properties,
+    items: {
+      ...MEAL_SCHEMA.properties.items,
+      items: {
+        ...MEAL_SCHEMA.properties.items.items,
+        properties: { ...MEAL_SCHEMA.properties.items.items.properties, source: { type: 'STRING' } },
+        required: [...MEAL_SCHEMA.properties.items.items.required, 'source'],
+      },
+    },
+  },
+}
+
+const MAX_WEB_TEXT = 9_000 // web snippets sent to the model
+const SEARCH_TIMEOUT_MS = 8_000
+
 const MAX_FOODS_TEXT = 15_000 // saved-food list sent with meal requests
 
 // Low thinking keeps answers fast (default "medium" took 2+ minutes). Each model gets 25 s before we move on.
@@ -212,6 +254,7 @@ export default {
     }
 
     let payload
+    let sites = null // search mode: real result sites, used to check the AI's `source`
     if (body.mode === 'text' && typeof body.text === 'string' && body.text.trim()) {
       payload = {
         contents: [{ parts: [{ text: `${RULES_TEXT}\n\nFood: ${body.text.trim().slice(0, 500)}` }] }],
@@ -222,6 +265,20 @@ export default {
       payload = {
         contents: [{ parts: [{ text: `${RULES_MEAL}\n\nSaved foods:\n${foods || '(none)'}\n\nMeal: ${body.text.trim().slice(0, 800)}` }] }],
         generationConfig: { responseMimeType: 'application/json', responseSchema: MEAL_SCHEMA, ...THINKING },
+      }
+    } else if (body.mode === 'search' && typeof body.text === 'string' && body.text.trim()) {
+      const foods = typeof body.foods === 'string' ? body.foods.slice(0, MAX_FOODS_TEXT) : ''
+      const text = body.text.trim().slice(0, 800)
+      const fix = typeof body.fix === 'string' ? body.fix.trim().slice(0, 500) : ''
+      const current = fix && typeof body.current === 'string' ? body.current.slice(0, 3_000) : ''
+      const ask = `Saved foods:\n${foods || '(none)'}\n\nMeal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}` : ''}`
+      const web = await webLookup(ask, env)
+      // Sites the AI may name as a source: this search's results, plus sources already on screen (a fix keeps those).
+      for (const m of current.matchAll(/from ([a-z0-9.-]+\.[a-z]{2,})/gi)) web.sites.add(m[1].toLowerCase())
+      sites = web.sites
+      payload = {
+        contents: [{ parts: [{ text: `${RULES_SEARCH}\n\n${ask}\n\nWeb results:\n${web.text || '(none found)'}` }] }],
+        generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, ...THINKING },
       }
     } else if (body.mode === 'label' && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64) {
       payload = {
@@ -249,8 +306,10 @@ export default {
       const text = (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join('')
       const raw = parseJson(text)
       if (!raw) return reply(502, { error: 'AI gave an unreadable answer. Try again.' })
-      if (body.mode === 'meal') {
+      if (body.mode === 'meal' || body.mode === 'search') {
         const meal = fromMeal(raw)
+        // A source the search never returned is made up (seen: "egmenus.com"): drop it, so the item counts as an estimate.
+        if (sites) for (const i of meal.items) if (i.source && !knownSite(i.source, sites)) i.source = ''
         if (!meal.items.length) return reply(502, { error: 'AI found no food in that. Try describing it differently.' })
         return reply(200, { meal, model })
       }
@@ -293,6 +352,7 @@ function fromMeal(r) {
     kcal: num(i.kcal), protein: num(i.protein), carbs: num(i.carbs), fat: num(i.fat),
     confidence: conf(i.confidence),
     note: String(i.note ?? '').slice(0, 200),
+    source: String(i.source ?? '').slice(0, 60),
   }))
   return { name: String(r.mealName ?? 'Meal').slice(0, 80), items }
 }
@@ -312,6 +372,68 @@ function fromLabel(r) {
     kcal: num(r.kcal), protein: num(r.protein), carbs: num(r.carbs), fat: num(r.fat),
     confidence: conf(r.confidence),
     note: String(r.note ?? '').slice(0, 200),
+  }
+}
+
+/**
+ * Web lookup for search mode: a fast model writes up to 3 queries, Tavily runs them in parallel,
+ * and the snippets come back as one text block. Any failure just means "no web results" (the estimate still works).
+ */
+async function webLookup(ask, env) {
+  const sites = new Set()
+  if (!env.TAVILY_API_KEY) return { text: '', sites }
+  const t0 = Date.now()
+  // Fastest model first: planning is simple and every second counts here.
+  let queries = []
+  for (const model of env.MODELS.split(',').map((m) => m.trim()).reverse()) {
+    const r = await callModel(model, {
+      contents: [{ parts: [{ text: `${RULES_PLAN}\n\n${ask}` }] }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: PLAN_SCHEMA, ...THINKING },
+    }, env.GEMINI_API_KEY, 10_000)
+    if (r.status !== 200) continue
+    const raw = parseJson((r.data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''))
+    queries = (Array.isArray(raw?.queries) ? raw.queries : []).map((q) => String(q).trim().slice(0, 200)).filter(Boolean).slice(0, 3)
+    break
+  }
+  const found = await Promise.all(queries.map((q) => tavily(q, env.TAVILY_API_KEY)))
+  // Queries count and timing only (never the food text), visible with `wrangler tail`.
+  console.log(JSON.stringify({ mode: 'search', queries: queries.length, results: found.map((f) => f.length), ms: Date.now() - t0 }))
+  let out = ''
+  found.forEach((results, n) => {
+    if (!results.length) return
+    out += `Search "${queries[n]}":\n`
+    for (const x of results) {
+      out += `- [${x.site}] ${x.title}: ${x.content}\n`
+      if (x.site) sites.add(x.site.toLowerCase())
+    }
+  })
+  return { text: out.slice(0, MAX_WEB_TEXT), sites }
+}
+
+/** True when `source` is one of the sites (or a subdomain / parent of one), ignoring "www." and case. */
+function knownSite(source, sites) {
+  const s = source.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0]
+  for (const x of sites) if (s === x || s.endsWith(`.${x}`) || x.endsWith(`.${s}`)) return true
+  return false
+}
+
+async function tavily(query, key) {
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ query, search_depth: 'basic', max_results: 4, include_answer: false }),
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data.results ?? []).map((x) => {
+      let site = ''
+      try { site = new URL(x.url).hostname.replace(/^www\./, '') } catch { /* keep blank */ }
+      return { site, title: String(x.title ?? '').slice(0, 120), content: String(x.content ?? '').replace(/\s+/g, ' ').slice(0, 600) }
+    })
+  } catch {
+    return []
   }
 }
 
