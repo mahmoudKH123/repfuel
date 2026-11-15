@@ -65,7 +65,12 @@ export interface Settings {
   waterGoalMl?: number
   /** Profile picture: a photo (data URL) or a built-in avatar id; the initial shows when unset. */
   avatar?: string
+  /** The photo behind a photo avatar (at most 1280 px) and how it was framed, so it can be adjusted again. */
+  avatarPhoto?: AvatarPhoto
 }
+
+/** u, v: centre of the kept circle as a share of the photo's width and height; zoom 1 = the circle just fits. */
+export interface AvatarPhoto { src: string; u: number; v: number; zoom: number }
 
 export interface SettingRow {
   key: 'settings'

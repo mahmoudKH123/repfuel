@@ -2,9 +2,10 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Intro } from './Intro'
 
-/* Launch intro gate. While the intro plays, the page underneath is already rendered (so the logo knows where to fly)
-   but its entrance motion is held: CSS animations pause via html[data-intro='build'], and number count-ups / bar fills
-   (ui/motion.ts) wait in this queue. They all start together the moment the logo begins its flight. */
+/* Launch intro gate. While the intro plays, the page underneath is already rendered (so the logo knows where to morph)
+   but its entrance motion is held: CSS animations pause via html[data-intro='build'] until the morph starts ('fly'),
+   and number count-ups / bar fills / the bar's bend (ui/motion.ts, Barbell) wait in this queue until the bar lands,
+   so the page settles in around it. */
 let queue: (() => void)[] | null = null
 
 /** Runs `f` now, or when the intro releases the page. Returns a cancel function. */
@@ -14,8 +15,7 @@ export function afterIntro(f: () => void): () => void {
   return () => { if (queue) queue = queue.filter((x) => x !== f) }
 }
 
-function release() {
-  document.documentElement.dataset.intro = 'fly'
+function flush() {
   const q = queue ?? []
   queue = null
   q.forEach((f) => f())
@@ -34,10 +34,18 @@ export function mountIntro() {
   const finish = () => {
     if (done) return
     done = true
-    if (queue) release()
+    if (queue) flush()
     delete document.documentElement.dataset.intro
     root.unmount()
     host.remove()
   }
-  root.render(createElement(Intro, { onRelease: release, onDone: finish }))
+  // Landing: the page's own barbell appears under the morphed pieces (hidden while html[data-intro] is set), already
+  // built: html[data-landed] turns off its own entrance animations for the rest of the session.
+  const fly = () => { document.documentElement.dataset.intro = 'fly' }
+  const land = () => {
+    document.documentElement.dataset.landed = ''
+    delete document.documentElement.dataset.intro
+    if (queue) flush()
+  }
+  root.render(createElement(Intro, { onRelease: fly, onLand: land, onDone: finish }))
 }

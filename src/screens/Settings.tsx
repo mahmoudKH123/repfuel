@@ -119,8 +119,8 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
 
       {picking && (
         <AvatarSheet
-          value={settings.avatar} name={settings.name || 'Mahmoud'} onClose={() => setPicking(false)}
-          onPick={(avatar) => { void saveSettings({ ...settings, avatar }) }}
+          value={settings.avatar} photo={settings.avatarPhoto} name={settings.name || 'Mahmoud'} onClose={() => setPicking(false)}
+          onPick={(avatar, avatarPhoto) => { void saveSettings({ ...settings, avatar, avatarPhoto }) }}
           onName={(name) => { void saveSettings({ ...settings, name }) }}
         />
       )}
@@ -812,7 +812,7 @@ function LookPanel({ mode, onMode }: { mode: ThemeMode; onMode: (m: ThemeMode) =
           </button>
         ))}
       </div>
-      <p className="st-note">Auto follows your iPhone. Tapping the logo also switches.</p>
+      <p className="st-note">Auto follows your iPhone.</p>
     </div>
   )
 }

@@ -138,8 +138,9 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 
 /* App bar */
 .appbar { padding: calc(var(--top) + 12px) 16px 4px; }
-/* Greeting: hello for the hour (tinted by the light outside), name, smart line. Plays once. */
-.gr { width: 100%; max-width: 608px; margin: 0 auto; display: flex; align-items: center; gap: 14px; }
+/* Greeting: a large title (no logo; the mark lives on Today's barbell). Hello for the hour, tinted by the light
+   outside, then your name and the date: 20 + 40 + 20 px. Plays once. */
+.gr { width: 100%; max-width: 608px; margin: 0 auto; display: flex; flex-direction: column; }
 .gr { --sky: #e8a400; --sky-text: #b07a00; }
 .gr[data-phase='dawn'] { --sky: #ff8f5e; --sky-text: #d2602d; }
 .gr[data-phase='golden'] { --sky: #ff8a3d; --sky-text: #cf6418; }
@@ -147,12 +148,9 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 .gr[data-phase='night'] { --sky: #a9bde6; --sky-text: #5670a8; }
 :root[data-theme='dark'] .gr { --sky-text: var(--sky); }
 :root[data-theme='dark'] .gr[data-phase='day'] { --sky: #ffc53d; }
-.gr .logo-btn { flex: none; border-radius: 15px; }
-/* Three lines exactly the logo tile's height: 16 + 24 + 14 = 54 px. */
-.gr-text { flex: 1; min-width: 0; height: 54px; display: flex; flex-direction: column; justify-content: center; }
-.gr-hello { font-size: 13px; line-height: 16px; font-weight: 600; color: var(--sky-text); animation: grIn 0.5s var(--ease) both; }
-.gr-name { font-size: 24px; line-height: 24px; font-weight: 800; letter-spacing: -0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gr-day { font-size: 13px; line-height: 14px; font-weight: 500; color: var(--text2); animation: grIn 0.5s var(--ease) 0.2s both; }
+.gr-hello { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--sky-text); animation: grIn 0.5s var(--ease) both; }
+.gr-name { font-size: 34px; line-height: 40px; font-weight: 800; letter-spacing: -0.03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gr-day { font-size: 15px; line-height: 20px; font-weight: 500; color: var(--text2); animation: grIn 0.5s var(--ease) 0.2s both; }
 .gr-name span { display: inline-block; animation: grLetter 0.55s var(--ease) both; }
 @keyframes grIn { from { opacity: 0; transform: translateY(4px); } }
 @keyframes grLetter { from { opacity: 0; transform: translateY(0.45em); } }
@@ -160,9 +158,6 @@ body { margin: 0; background: var(--bg); color: var(--text); }
 main { flex: 1; padding: 4px 16px calc(env(safe-area-inset-bottom) + 110px); max-width: 640px; width: 100%; margin: 0 auto; }
 .screen { animation: fadeIn 0.28s var(--ease) both; }
 
-/* Logo doubles as the light/dark switch */
-.logo-btn { padding: 0; border: 0; background: none; border-radius: 10px; line-height: 0; transition: transform 0.2s var(--ease); }
-.logo-btn:active { transform: scale(0.9); opacity: 1; }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.35s; animation-timing-function: ease; }
 
 /* Tab bar */
@@ -304,21 +299,35 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 /* Today: open canvas. Budget straight on the page, week as dots, meals as one grouped list. */
 .td { padding-top: 4px; }
 /* Today: the day as a barbell (ui/Barbell.tsx) that bends under what you've eaten. Rod grows out from the grip, the
-   plates slide on, then the bar springs into its bend. Dashed line = the bend at your target. Over = ends turn warm. */
+   plates slide on, then the bar springs into its bend. Over = ends turn warm. */
 .bb { margin: 24px -4px 0; }
 .bb svg { display: block; width: 100%; height: auto; overflow: visible; }
-.bb-rod { fill: none; stroke: var(--steel); stroke-width: 9; stroke-linecap: round; transform-box: fill-box; transform-origin: center; animation: bbRod 0.7s var(--ease) both; }
-.bb-end { fill: var(--steel2); animation: fadeIn 0.4s ease 0.35s both; }
+.bb-rod { fill: none; stroke: var(--steel); stroke-width: 9; stroke-linecap: round; transform-box: fill-box; transform-origin: center; }
+.bb-end { fill: var(--steel2); }
+.bb-in .bb-rod { animation: bbRod 0.7s var(--ease) both; }
+.bb-in .bb-end { animation: fadeIn 0.4s ease 0.35s both; }
 .bb.over .bb-end { fill: var(--fat); }
-.bb-grip { fill: var(--steel2); transform-box: fill-box; transform-origin: center; animation: pop 0.45s var(--ease) both; }
-.bb-mark { font: 900 11px -apple-system, sans-serif; fill: #fff; opacity: 0.9; animation: fadeIn 0.4s ease 0.3s both; }
-.bb-collar { fill: var(--logo-plate); transform-box: fill-box; transform-origin: center; animation: bbCollar 0.5s cubic-bezier(0.34, 1.5, 0.64, 1) 0.2s both; }
-.bb-plate { transform-box: fill-box; transform-origin: center; animation: bbPlateL 0.7s cubic-bezier(0.34, 1.35, 0.64, 1) both; }
-.bb-plate.r { animation-name: bbPlateR; }
+/* The grip is the app mark (the launch intro's logo pill and R end up here). */
+.bb-grip { stroke: var(--logo-edge); stroke-width: 1; transform-box: fill-box; transform-origin: center; }
+.bb-r { fill: var(--logo-r); transform-box: fill-box; transform-origin: center; }
+.bb-in .bb-grip { animation: bbGrip 0.55s cubic-bezier(0.34, 1.3, 0.64, 1) both; }
+.bb-in .bb-r { animation: pop 0.35s var(--ease) both; }
+/* Cold start: the bar is hidden while the logo morphs into it (ui/morph.ts), held still so it can be measured, then
+   shown already built: no entrance animations after the morph has landed. */
+:root[data-intro] .bb { opacity: 0; }
+:root[data-intro] .bb *, :root[data-landed] .bb * { animation: none !important; }
+/* ...and what's under it waits faint and a little low until the bar lands, then settles in (morph.ts settlePage). */
+:root[data-intro] .td-budget > .td-big, :root[data-intro] .td-budget > .td-cap, :root[data-intro] .td-budget > .td-macros,
+:root[data-intro] .td .wt, :root[data-intro] .td .td-week, :root[data-intro] .td .td-loghead, :root[data-intro] .td .td-group { opacity: 0.16; transform: translateY(14px); }
+@keyframes bbGrip { from { transform: scaleX(0.325); } }
+.bb-collar { fill: var(--logo-plate); transform-box: fill-box; transform-origin: center; }
+.bb-in .bb-collar { animation: bbCollar 0.5s cubic-bezier(0.34, 1.5, 0.64, 1) 0.2s both; }
+.bb-plate { transform-box: fill-box; transform-origin: center; }
+.bb-in .bb-plate { animation: bbPlateL 0.7s cubic-bezier(0.34, 1.35, 0.64, 1) both; }
+.bb-in .bb-plate.r { animation-name: bbPlateR; }
 .bb-plate.a { fill: var(--p1); }
 .bb-plate.b { fill: var(--p2); }
 .bb.over .bb-collar { fill: var(--fat); }
-.bb-target { fill: none; stroke: var(--text2); stroke-opacity: 0.35; stroke-width: 1.4; stroke-dasharray: 4 4; animation: fadeIn 0.6s ease 1s both; }
 @keyframes bbRod { from { transform: scaleX(0.15); } }
 @keyframes bbCollar { from { transform: scaleY(0.2); opacity: 0; } }
 @keyframes bbPlateL { from { opacity: 0; transform: translateX(-70px) scaleY(0.9); } 50% { opacity: 1; } }
@@ -339,11 +348,6 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 @keyframes wordDrop { from { opacity: 0; transform: translateY(-0.5em) rotate(-6deg); } 60% { opacity: 1; } }
 .td-other { display: flex; align-items: center; gap: 10px; margin: 2px 0 4px; font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text2); }
 .td-other b { color: var(--text); font-weight: 800; }
-/* Living logo (top row): plates slide off the bar until the workout is finished (rest days keep them on). */
-.gr .lg-p { transform-box: fill-box; transition: transform 0.6s cubic-bezier(0.34, 1.5, 0.64, 1), opacity 0.4s ease; }
-.gr .lg-plates.off .lg-p { opacity: 0.2; }
-.gr .lg-plates.off .lg-p.l { transform: translateX(-90px); }
-.gr .lg-plates.off .lg-p.r { transform: translateX(90px); }
 .td-back { margin-left: auto; padding: 5px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--card2); color: var(--text); }
 
 .td-budget { padding: 26px 0 4px; }
@@ -1107,8 +1111,34 @@ button.meal-unit { color: var(--kcal); }
   flex: 1; min-width: 0; padding: 13px 16px 13px 0; border: 0; background: none; color: var(--text);
   font: inherit; font-size: 16px; font-weight: 600; text-align: right; outline: none;
 }
+.av-photos { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.av-photos.two { grid-template-columns: 1fr 1fr; }
+.av-now-btn { padding: 0; border-radius: 50%; background: none; }
+.av-now-btn:active .av { transform: scale(0.95); }
+
+/* Move and Scale: full-screen photo framing */
+.pc {
+  position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; background: #000; color: #fff;
+  padding: calc(env(safe-area-inset-top) + 14px) 0 calc(env(safe-area-inset-bottom) + 10px); animation: fadeIn 0.2s ease both;
+}
+.pc-title { margin: 0; text-align: center; font-size: 17px; font-weight: 600; }
+.pc-stage { position: relative; flex: 1; overflow: hidden; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+.pc-stage:active { cursor: grabbing; }
+.pc-img { position: absolute; left: 50%; top: 50%; max-width: none; pointer-events: none; transform-origin: center; -webkit-user-drag: none; }
+.pc-ring {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.62); outline: 1px solid rgba(255, 255, 255, 0.55);
+}
+.pc-zoom { display: flex; align-items: center; gap: 14px; width: min(320px, calc(100% - 48px)); margin: 14px auto 6px; color: rgba(255, 255, 255, 0.7); }
+.pc-zoom svg { flex: none; fill: none; stroke: currentColor; stroke-width: 2; }
+.pc-zoom input { flex: 1; accent-color: #fff; }
+.pc-bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 6px 20px 0; }
+.pc-bar button { padding: 12px 4px; background: none; color: #fff; font-size: 17px; font-weight: 500; justify-self: start; }
+.pc-bar .pc-reset { justify-self: center; font-size: 15px; color: rgba(255, 255, 255, 0.75); }
+.pc-bar .pc-reset:disabled { opacity: 0.3; }
+.pc-bar .pc-choose { justify-self: end; font-weight: 700; color: #ffd60a; }
 .av-photo {
-  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 13px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-width: 0; padding: 13px; border-radius: 14px;
   font-size: 16px; font-weight: 600; color: var(--kcal); background: color-mix(in srgb, var(--kcal) 13%, var(--card2));
 }
 .av-photo svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
@@ -1405,7 +1435,6 @@ button.meal-unit { color: var(--kcal); }
 /* Launch intro (cold start only, see ui/Intro.tsx + ui/introGate.ts). Every part's resting style is its FINAL look and
    the keyframes animate in from the start state, so "intro-skip" (tap) can drop the animations and land on the built logo. */
 :root[data-intro='build'] .app *, :root[data-intro='build'] .app *::before, :root[data-intro='build'] .app *::after { animation-play-state: paused !important; }
-:root[data-intro] .gr .logo-btn { opacity: 0; }
 .intro { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; touch-action: none; }
 .intro-bg { position: absolute; inset: 0; overflow: hidden; background: var(--bg); }
 .intro-bg::after {
@@ -1477,6 +1506,14 @@ button.meal-unit { color: var(--kcal); }
 .intro-word span { display: inline-block; animation: wordIn 0.6s var(--ease) both; animation-delay: calc(0.8s + var(--i) * 0.045s); }
 .intro-word .a { color: var(--accent); }
 @keyframes wordIn { from { opacity: 0; transform: translateY(70%); filter: blur(8px); } }
+/* Morph pieces: plain boxes flown from the logo's parts to the barbell's (positions and colours set per frame). */
+.intro-layer { position: absolute; inset: 0; pointer-events: none; }
+.mo { position: absolute; left: 0; top: 0; will-change: transform; }
+.mo-grip { box-shadow: inset 0 0 0 1.3px var(--edge0); }
+.mo-tile { position: absolute; inset: 0; border-radius: inherit; opacity: 0; background: linear-gradient(var(--logo-bg1), var(--logo-bg2)); box-shadow: inset 0 0 0 1px var(--logo-edge); }
+.mo-charge { background: linear-gradient(var(--logo-ch1), var(--logo-ch2)); }
+.mo-r svg { display: block; fill: var(--logo-r); }
+.mo-shadow { z-index: 0; opacity: 0; border-radius: 50%; background: radial-gradient(closest-side, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.18) 55%, transparent); }
 .intro-skip .intro-tile, .intro-skip .intro-tile *, .intro-skip .intro-tile *::after, .intro-skip .intro-word span, .intro-skip .intro-burst, .intro-skip .ib { animation: none !important; }
 
 /* Rows only light up on a real press: the highlight waits a moment, and is dropped as soon as the finger starts to scroll

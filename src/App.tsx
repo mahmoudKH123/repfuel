@@ -35,7 +35,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [date, setDate] = useState(today)
   const [adding, setAdding] = useState(false)
-  const [theme, toggleTheme, themeMode, setThemeMode] = useTheme()
+  const [themeMode, setThemeMode] = useTheme()
   const settings = useSettings()
   const [seenToday, setSeenToday] = useState(today)
   if (seenToday !== today) {
@@ -61,7 +61,7 @@ export default function App() {
     <div className="app">
       <div className="aurora" aria-hidden="true" />
       <header className="appbar">
-        <Greeting today={today} name={settings.name || 'Mahmoud'} onLogo={toggleTheme} logoLabel={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} />
+        <Greeting today={today} name={settings.name || 'Mahmoud'} />
       </header>
       <main key={tab} className="screen">
         {tab === 'today' && <Today date={date} today={today} onDateChange={setDate} onAdd={openAdd} />}

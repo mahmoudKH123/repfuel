@@ -21,8 +21,8 @@ function apply(t: Theme) {
 
 export type ThemeMode = 'auto' | Theme
 
-/** Light/dark theme: follows the phone ('auto') until the user picks one (logo tap or Settings), then remembers it. */
-export function useTheme(): [Theme, () => void, ThemeMode, (m: ThemeMode) => void] {
+/** Light/dark theme: follows the phone ('auto') until the user picks one in Settings, then remembers it. */
+export function useTheme(): [ThemeMode, (m: ThemeMode) => void] {
   const [mode, setModeState] = useState<ThemeMode>(() => saved() ?? 'auto')
   const [theme, setTheme] = useState<Theme>(() => saved() ?? system())
 
@@ -49,7 +49,5 @@ export function useTheme(): [Theme, () => void, ThemeMode, (m: ThemeMode) => voi
     if (doc.startViewTransition && !reduced) doc.startViewTransition(run)
     else run()
   }
-  const toggle = () => setMode(theme === 'dark' ? 'light' : 'dark')
-
-  return [theme, toggle, mode, setMode]
+  return [mode, setMode]
 }
