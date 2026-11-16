@@ -77,11 +77,6 @@ export async function deleteEntry(id: number): Promise<void> {
   await db.entries.delete(id)
 }
 
-/** Puts a deleted item back exactly as it was (same id, time and numbers). Used by Undo. */
-export async function restoreEntry(e: Entry): Promise<void> {
-  await db.entries.put(e)
-}
-
 /** Moves a logged item to another part of the day by changing its time (the day itself stays). */
 export async function updateEntryTime(id: number, createdAt: number): Promise<void> {
   await db.entries.update(id, { createdAt })
@@ -237,15 +232,5 @@ export async function addWater(date: string, ml: number): Promise<void> {
   await db.transaction('rw', db.water, async () => {
     const have = await db.water.get(date)
     await db.water.put({ date, ml: (have?.ml ?? 0) + ml, sips: [...(have?.sips ?? []), ml] })
-  })
-}
-
-/** Takes back the last drink added on a day. */
-export async function undoWater(date: string): Promise<void> {
-  await db.transaction('rw', db.water, async () => {
-    const have = await db.water.get(date)
-    if (!have?.sips.length) return
-    const last = have.sips[have.sips.length - 1]
-    await db.water.put({ date, ml: Math.max(0, have.ml - last), sips: have.sips.slice(0, -1) })
   })
 }

@@ -6,7 +6,9 @@ import { Settings } from './screens/Settings'
 import { AddFood } from './screens/AddFood'
 import { Train } from './screens/Train'
 import { Greeting } from './ui/Greeting'
-import { useTheme } from './ui/theme'
+import { useTheme, type ThemeMode } from './ui/theme'
+import { UndoPill } from './ui/UndoPill'
+import { recordUndo } from './db/undo'
 import { IconPlus, IconSettings, IconToday, IconTrain, IconWeek } from './ui/icons'
 import { useSettings } from './ui/hooks'
 
@@ -52,13 +54,23 @@ export default function App() {
     setAdding(true)
   }
 
+  // Look changes live outside the database, so they register their own undo.
+  const MODE_NAME: Record<ThemeMode, string> = { auto: 'Auto', light: 'Light', dark: 'Dark' }
+  const changeTheme = (m: ThemeMode) => {
+    const prev = themeMode
+    if (m === prev) return
+    setThemeMode(m)
+    recordUndo(`Look: ${MODE_NAME[prev]} → ${MODE_NAME[m]}`, () => setThemeMode(prev))
+  }
+
   // Each tab has its own colour world (see index.css); on <html> so sheets and panels follow too.
   useEffect(() => { document.documentElement.dataset.world = adding ? 'add' : tab }, [adding, tab])
 
-  if (adding) return <><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} /></div><div className="aurora aurora-cover" aria-hidden="true" /></>
+  // The undo pill stays mounted in the same place whichever view is showing.
+  if (adding) return <><><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} /></div><div className="aurora aurora-cover" aria-hidden="true" /></><UndoPill /></>
 
   return (
-    <div className="app">
+    <><div className="app">
       <div className="aurora" aria-hidden="true" />
       <header className="appbar">
         <Greeting today={today} name={settings.name || 'Mahmoud'} />
@@ -68,7 +80,7 @@ export default function App() {
         {tab === 'week' && <Week date={date} today={today} onDateChange={setDate} onOpenDay={(d) => { setDate(d); setTab('today') }} />}
         {tab === 'train' && <Train today={today} />}
         {tab === 'settings' && (
-          <Settings today={today} themeMode={themeMode} onThemeMode={setThemeMode} onOpenFoods={() => { setDate(today); setAdding(true) }} />
+          <Settings today={today} themeMode={themeMode} onThemeMode={changeTheme} onOpenFoods={() => { setDate(today); setAdding(true) }} />
         )}
       </main>
       <div className="aurora aurora-cover" aria-hidden="true" />
@@ -85,6 +97,6 @@ export default function App() {
           </Fragment>
         ))}
       </nav>
-    </div>
+    </div><UndoPill /></>
   )
 }

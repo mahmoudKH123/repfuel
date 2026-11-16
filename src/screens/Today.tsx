@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties, type TouchEvent } from
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { Entry } from '../db/types'
-import { copyDay, deleteEntry, restoreEntry, setDayType, updateEntryAmount, updateEntryTime } from '../db/repo'
+import { copyDay, deleteEntry, setDayType, updateEntryAmount, updateEntryTime } from '../db/repo'
+import { undoable } from '../db/undo'
 import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType, type WeekSummary } from '../logic/budget'
 import { dayIndex, mondayOf } from '../logic/schedule'
@@ -50,14 +51,8 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
     const t = window.setTimeout(() => setNotice(''), 3600)
     return () => window.clearTimeout(t)
   }, [notice])
-  // Deleting shows an Undo bar for 5 seconds.
-  const [removed, setRemoved] = useState<Entry | null>(null)
-  useEffect(() => {
-    if (!removed) return
-    const t = window.setTimeout(() => setRemoved(null), 5000)
-    return () => window.clearTimeout(t)
-  }, [removed])
-  const remove = async (e: Entry) => { await deleteEntry(e.id!); setRemoved(e) }
+  // Deleting can be taken back with the app-wide undo.
+  const remove = (e: Entry) => undoable(`Removed ${e.name}`, () => deleteEntry(e.id!))
   const [shown, setShown] = useState({ date, dir: '' })
   if (shown.date !== date) setShown({ date, dir: date > shown.date ? 'next' : 'prev' })
   const swipe = useSwipe(() => onDateChange(addDays(date, 1)), () => onDateChange(addDays(date, -1)))
@@ -73,15 +68,21 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
 
   const yesterday = addDays(date, -1)
   const copyYesterday = async () => {
-    const count = await copyDay(yesterday, date)
-    setNotice(count ? `Copied ${count} item${count === 1 ? '' : 's'} from ${formatDay(yesterday)}` : `Nothing logged on ${formatDay(yesterday)}`)
+    const count = await undoable(
+      (c) => (c ? `Copied ${c} item${c === 1 ? '' : 's'} from ${formatDay(yesterday)}` : null),
+      () => copyDay(yesterday, date),
+    )
+    if (!count) setNotice(`Nothing logged on ${formatDay(yesterday)}`)
   }
 
   const training = day.type === 'training'
   const doneId = session && session.done.length > 0 ? session.dayId : undefined
   const workout = planDays?.find((d) => d.id === (doneId ?? plan?.days[dayIndex(monday, date)]))
   const word = (training ? workout?.short || 'Train' : 'Rest').toUpperCase()
-  const toggleType = () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings))
+  const toggleType = () => undoable(
+    `${formatDay(date)}: ${training ? 'Training → Rest' : 'Rest → Training'}`,
+    () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings)),
+  )
   const groups = TIMES.map((t, i) => ({
     ...t,
     items: entries.filter((e) => { const h = new Date(e.createdAt).getHours(); return h < t.until && (i === 0 || h >= TIMES[i - 1].until) }),
@@ -145,12 +146,6 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
         {showHint && entries.length > 0 && <p className="td-note">Tap a food to change it, swipe left to delete.</p>}
         {notice && <p key={notice} className="td-note flash" role="status">{notice}</p>}
       </div>
-      {removed && (
-        <div className="add-toast above-tabs" role="status">
-          <span>{removed.name} deleted</span>
-          <button onClick={() => { restoreEntry(removed); setRemoved(null) }}>Undo</button>
-        </div>
-      )}
     </section>
   )
 }
@@ -259,7 +254,9 @@ function EntryRow({ entry: e, index, onUsed, onDelete }: { entry: Entry; index: 
 
   const save = async () => {
     const v = Number(amount)
-    if (v > 0) await updateEntryAmount(e.id!, v)
+    if (v > 0 && v !== e.amount) {
+      await undoable(`${e.name} ${fmtAmount(e.amount, e.unit)} → ${fmtAmount(v, e.unit)}`, () => updateEntryAmount(e.id!, v))
+    }
     setEditing(false)
   }
 
@@ -310,7 +307,7 @@ function WhenSwitch({ entry: e }: { entry: Entry }) {
     if (i === at) return
     const d = new Date(e.createdAt)
     d.setHours([9, 14, 19][i])
-    updateEntryTime(e.id!, d.getTime())
+    undoable(`${e.name} → ${TIMES[i].label}`, () => updateEntryTime(e.id!, d.getTime()))
   }
   return (
     <div className="unit-seg td-when" role="radiogroup" aria-label="Part of the day" style={{ '--n': 3, '--i': at } as CSSProperties}>

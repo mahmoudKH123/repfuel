@@ -386,11 +386,9 @@ button.quiet { padding: 5px 12px; font-size: 13px; font-weight: 600; border-radi
 .wt-label { font-size: 9px; font-weight: 700; fill: var(--text2); }
 @keyframes wtSway { to { transform: translateX(-60px); } }
 @keyframes wtBubble { 0% { opacity: 0; transform: translateY(0); } 15% { opacity: 0.6; } 85% { opacity: 0.5; } 100% { opacity: 0; transform: translateY(var(--rise)); } }
-.wt-actions { display: grid; grid-template-columns: repeat(3, 1fr) 40px; gap: 8px; margin-top: 14px; }
+.wt-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
 .wt-add { height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--water) 12%, transparent); color: var(--water); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .wt-add:active { transform: scale(0.95); opacity: 1; }
-.wt-undo { height: 40px; display: grid; place-items: center; border-radius: 12px; background: var(--track); color: var(--text2); }
-.wt-undo:disabled { opacity: 0.35; }
 @media (prefers-reduced-motion: reduce) { .wt-level { transition: none; } .wt-front, .wt-back { animation: none; } .wt-bubbles { display: none; } }
 .td-macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 18px; }
 .td-macro { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -479,7 +477,6 @@ html.scrolling .td-addrow:active .td-plus { transform: none; }
 .td-note { margin: 12px 4px 0; font-size: 13px; color: var(--text2); text-align: center; }
 .td-note.flash { animation: fadeIn 0.25s var(--ease) both, fadeOut 0.4s ease 3.2s forwards; }
 .td-when { margin: 10px 0 0; }
-.add-toast.above-tabs { bottom: calc(env(safe-area-inset-bottom) + 96px); }
 
 /* Week */
 
@@ -635,8 +632,6 @@ body:has(.add-done) .add-dock { opacity: 0; transition: opacity 0.15s ease; poin
 .plate button.plate-clear { display: block; margin: 2px auto 6px; font-size: 14px; font-weight: 600; color: var(--fat); }
 .plate-fly { position: fixed; z-index: 50; width: 18px; height: 18px; pointer-events: none; }
 .plate-fly span { display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--kcal); box-shadow: 0 2px 8px color-mix(in srgb, var(--kcal) 45%, transparent); }
-body:has(.plate-dock) .add-toast { bottom: calc(env(safe-area-inset-bottom) + 118px); }
-.add-toast span small { display: block; margin-top: 1px; font-size: 12px; font-weight: 600; opacity: 0.65; }
 @keyframes plateIn { from { opacity: 0; transform: translateY(70%) scale(0.96); } }
 @keyframes plateOut { to { opacity: 0; transform: translateY(60%) scale(0.97); } }
 @media (prefers-reduced-motion: reduce) { .plate-dock, .plate-dock.leaving { animation: none; } .plate-fuel span, .plate-list { transition: none; } }
@@ -770,13 +765,6 @@ button.meal-unit { color: var(--kcal); }
 .add-edit-grid { margin-bottom: 4px; }
 .add-go { width: 100%; padding: 16px; font-size: 17px; border-radius: 16px; margin-top: 6px; box-shadow: 0 6px 18px color-mix(in srgb, var(--kcal) 30%, transparent); }
 
-.add-toast {
-  position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom) + 18px); z-index: 30;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 12px 12px 16px; border-radius: 16px; background: var(--text); color: var(--bg);
-  font-weight: 600; font-size: 14px; animation: rise 0.3s var(--ease) both;
-}
-.add-toast button { background: color-mix(in srgb, var(--bg) 18%, transparent); color: var(--bg); padding: 7px 14px; font-size: 14px; font-weight: 700; }
 
 .add-done { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: fadeIn 0.2s ease both; }
 .add-done span { width: 88px; height: 88px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--kcal); animation: pop 0.35s var(--ease) both; }
@@ -891,11 +879,7 @@ button.meal-unit { color: var(--kcal); }
 }
 .tr-ol-x svg { flex: none; transition: transform 0.35s var(--ease); }
 .tr-ol-x path { fill: none; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; }
-.tr-ol-x span { display: none; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .tr-ol-x:active { transform: scale(0.88); }
-.tr-ol-x.ask { width: 76px; color: var(--fat); background: color-mix(in srgb, var(--fat) 16%, var(--card2)); }
-.tr-ol-x.ask span { display: inline; animation: rise 0.25s var(--ease) both; }
-.tr-ol-x.ask svg { transform: rotate(90deg); }
 .tr-ol.leaving .tr-ol-x svg { transform: rotate(180deg) scale(0.4); }
 .tr-ol.leaving .tr-ol-x { color: var(--fat); }
 .tr-ol.leaving .tr-ol-bar i { animation: tickOut 0.22s var(--ease) both; }
@@ -1748,4 +1732,48 @@ button.sp-val:active { transform: none; opacity: 0.7; }
   .pb-plate, .pb-plate.out.l, .pb-plate.out.r, .pb-n { animation: none; }
   .pb-plate.out { opacity: 0; }
   .pb-slot { transition: none; }
+}
+
+/* ===== Undo: one pill for the whole app ===== */
+.ud-pill, .ud-dock { position: fixed; z-index: 55; bottom: calc(env(safe-area-inset-bottom) + 84px); }
+.ud-pill {
+  left: 50%; transform: translateX(-50%); width: max-content; max-width: min(calc(100vw - 32px), 560px);
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 6px; border-radius: 999px;
+  background: var(--text); color: var(--bg); box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+  text-align: left; animation: udRise 0.38s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+.ud-pill:active { transform: translateX(-50%) scale(0.97); }
+.ud-ring { position: relative; flex: none; width: 34px; height: 34px; display: grid; place-items: center; }
+/* Only the countdown ring is rotated (so it drains from the top); the Undone check stays upright. */
+.ud-ring-svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+.ud-track { fill: none; stroke: color-mix(in srgb, var(--bg) 18%, transparent); stroke-width: 2.5; }
+.ud-left { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 94.25; stroke-dashoffset: 0; animation: udDrain linear both; }
+.ud-icon { fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.5s var(--ease); }
+.ud-icon.spin { transform: rotate(-360deg); }
+.ud-text { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.ud-text b { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; font-weight: 700; }
+.ud-text small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; font-weight: 600; opacity: 0.65; }
+.ud-go { flex: none; margin-left: 4px; padding: 7px 13px; border-radius: 999px; font-size: 13px; font-weight: 800; color: var(--text); background: var(--accent); }
+.ud-done { animation: udRise 0.3s var(--ease) both, udLeave 0.25s var(--ease) 1.55s forwards; padding-right: 16px; }
+.ud-check { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 24; animation: draw 0.35s var(--ease) both; }
+.ud-dock {
+  right: 16px; width: 48px; height: 48px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+  color: var(--bg); background: var(--text); box-shadow: 0 8px 22px rgba(0,0,0,0.22); animation: udDock 0.32s var(--ease) both;
+}
+.ud-dock .ud-icon { width: 20px; height: 20px; }
+.ud-dock:active { transform: scale(0.9); }
+@keyframes udRise { from { opacity: 0; transform: translate(-50%, 18px) scale(0.92); } }
+@keyframes udLeave { to { opacity: 0; transform: translate(-50%, 10px) scale(0.96); } }
+@keyframes udDrain { to { stroke-dashoffset: 94.25; } }
+@keyframes udDock { from { opacity: 0; transform: scale(0.4); } }
+/* Stay clear of whatever sits at the bottom: rest bar, Add food page and its pinned buttons, Settings panels */
+body:has(.rt) :is(.ud-pill, .ud-dock) { bottom: calc(env(safe-area-inset-bottom) + 146px); }
+body:has(.addpage) :is(.ud-pill, .ud-dock), body:has(.st-panel) :is(.ud-pill, .ud-dock) { bottom: calc(env(safe-area-inset-bottom) + 18px); }
+body:has(.add-dock) :is(.ud-pill, .ud-dock) { bottom: calc(env(safe-area-inset-bottom) + 96px); }
+body:has(.plate-dock) :is(.ud-pill, .ud-dock) { bottom: calc(env(safe-area-inset-bottom) + 118px); }
+body:has(.ud-pill) .tr-toast { bottom: calc(env(safe-area-inset-bottom) + 146px); }
+@media (prefers-reduced-motion: reduce) {
+  .ud-pill, .ud-dock, .ud-done { animation: none; }
+  .ud-left { animation: none; }
+  .ud-icon { transition: none; }
 }

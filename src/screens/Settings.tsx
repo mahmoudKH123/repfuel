@@ -11,7 +11,8 @@ import { weeklyWeights } from '../logic/weight'
 import { dayType } from '../logic/budget'
 import { kcalFromMacros, sum } from '../logic/macros'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, mondayOf } from '../logic/schedule'
-import { DEFAULT_REST, applyWeights, fmtClock, fmtWeight } from '../logic/train'
+import { DEFAULT_REST, applyWeights, describeChange, fmtClock, fmtWeight } from '../logic/train'
+import { recordUndo, undoable } from '../db/undo'
 import { getPass, setPass } from '../logic/ai'
 import { searchByName } from '../logic/search'
 import { useSettings } from '../ui/hooks'
@@ -120,8 +121,8 @@ export function Settings({ today, themeMode, onThemeMode, onOpenFoods }: Props) 
       {picking && (
         <AvatarSheet
           value={settings.avatar} photo={settings.avatarPhoto} name={settings.name || 'Mahmoud'} onClose={() => setPicking(false)}
-          onPick={(avatar, avatarPhoto) => { void saveSettings({ ...settings, avatar, avatarPhoto }) }}
-          onName={(name) => { void saveSettings({ ...settings, name }) }}
+          onPick={(avatar, avatarPhoto) => { void undoable(avatar ? 'Profile picture changed' : 'Profile picture removed', () => saveSettings({ ...settings, avatar, avatarPhoto })) }}
+          onName={(name) => { void undoable(`Name: ${settings.name || 'Mahmoud'} → ${name || 'Mahmoud'}`, () => saveSettings({ ...settings, name })) }}
         />
       )}
       {open && (
@@ -295,6 +296,13 @@ function TargetsPanel({ settings }: { settings: SettingsT }) {
   const [type, setType] = useState<DayType>('training')
   const [saved, setSaved] = useState(false)
   const [waterText, setWaterText] = useState(String((settings.waterGoalMl ?? DEFAULT_WATER_GOAL) / 1000))
+  // When the saved targets change (Save, or an undo), the form shows them.
+  const savedKey = JSON.stringify(settings)
+  useEffect(() => {
+    setDraft(settings)
+    setWaterText(String((settings.waterGoalMl ?? DEFAULT_WATER_GOAL) / 1000))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedKey])
   const t = draft.targets[type]
   const set = (key: keyof Macros, v: number) => {
     const next = { ...t, [key]: Math.max(0, Math.round(v)) }
@@ -380,7 +388,7 @@ function TargetsPanel({ settings }: { settings: SettingsT }) {
 
       <div className="st-actions">
         <Saved show={saved} />
-        <button className="primary" disabled={!dirty} onClick={async () => { await saveSettings(draft); setSaved(true) }}>Save targets</button>
+        <button className="primary" disabled={!dirty} onClick={async () => { await undoable('Targets changed', () => saveSettings(draft)); setSaved(true) }}>Save targets</button>
       </div>
     </div>
   )
@@ -418,7 +426,7 @@ function WeightPanel({ today, settings }: { today: string; settings: SettingsT }
         </div>
         <div className="st-actions">
           <Saved show={saved} label="Logged" />
-          <button className="primary" onClick={async () => { if (value > 20 && value < 300) { await logWeight(date, value); setSaved(true); setKg(null) } }}>Log weigh-in</button>
+          <button className="primary" onClick={async () => { if (value > 20 && value < 300) { await undoable(`Weigh-in ${value} kg · ${formatDay(date)}`, () => logWeight(date, value)); setSaved(true); setKg(null) } }}>Log weigh-in</button>
         </div>
       </div>
 
@@ -443,7 +451,7 @@ function WeightPanel({ today, settings }: { today: string; settings: SettingsT }
               {[...logs].reverse().map((l) => (
                 <li key={l.date}>
                   <span>{formatDay(l.date)}</span>
-                  <span className="st-list-val"><b>{l.kg}</b> kg <button className="st-del" onClick={() => deleteWeight(l.date)} aria-label={`Delete ${l.date}`}>Delete</button></span>
+                  <span className="st-list-val"><b>{l.kg}</b> kg <button className="st-del" onClick={() => undoable(`Removed weigh-in ${l.kg} kg · ${formatDay(l.date)}`, () => deleteWeight(l.date))} aria-label={`Delete ${l.date}`}>Delete</button></span>
                 </li>
               ))}
             </ul>
@@ -486,6 +494,8 @@ function WeightChart({ logs, reference }: { logs: { date: string; kg: number }[]
 function TrainingPanel({ today, settings, plan }: { today: string; settings: SettingsT; plan: PlanDay[] }) {
   const base = settings.trainingWeek ?? DEFAULT_WEEK
   const [days, setDays] = useState(base)
+  // The saved week changed (Save, or an undo): show it.
+  useEffect(() => { setDays(base) }, [base.join()]) // eslint-disable-line react-hooks/exhaustive-deps
   const [pick, setPick] = useState<number | null>(null)
   const [thisWeek, setThisWeek] = useState(true)
   const [saved, setSaved] = useState(false)
@@ -509,14 +519,14 @@ function TrainingPanel({ today, settings, plan }: { today: string; settings: Set
     <div className="st-training">
       <h3 className="st-h">During a workout</h3>
       <label className="st-toggle st-toggle-first">
-        <input type="checkbox" checked={tracking} onChange={(ev) => saveSettings({ ...settings, setTracking: ev.target.checked })} />
+        <input type="checkbox" checked={tracking} onChange={(ev) => { const on = ev.target.checked; undoable(`Set by set ${on ? 'on' : 'off'}`, () => saveSettings({ ...settings, setTracking: on })) }} />
         <span aria-hidden />
         Set by set + rest timer
       </label>
       {tracking && (
         <div className="st-rest">
           <Mini label="Rest between sets" value={restSec} min={15} step={15} show={fmtClock}
-            onChange={(n) => saveSettings({ ...settings, restSec: n })} />
+            onChange={(n) => undoable(`Rest ${fmtClock(restSec)} → ${fmtClock(n)}`, () => saveSettings({ ...settings, restSec: n }))} />
         </div>
       )}
       <p className="st-note">{tracking
@@ -555,7 +565,7 @@ function TrainingPanel({ today, settings, plan }: { today: string; settings: Set
       <div className="st-actions">
         <Saved show={saved} />
         <button className="small" disabled={days.join() === DEFAULT_WEEK.join()} onClick={() => { setDays(DEFAULT_WEEK); setSaved(false) }}>Default</button>
-        <button className="primary" disabled={!dirty} onClick={async () => { await saveTrainingWeek(days, thisWeek, today); setSaved(true) }}>Save week</button>
+        <button className="primary" disabled={!dirty} onClick={async () => { await undoable('Normal week changed', () => saveTrainingWeek(days, thisWeek, today)); setSaved(true) }}>Save week</button>
       </div>
       <p className="st-note">Rest days here also set your rest-day calorie targets.</p>
 
@@ -591,6 +601,8 @@ function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; ton
   const list = day.exerciseIds.map((id) => byId.get(id)).filter((e): e is Exercise => !!e)
   const [name, setName] = useState(day.name)
   const [short, setShort] = useState(day.short)
+  // The saved name changed (rename, or an undo): show it.
+  useEffect(() => { setName(day.name); setShort(day.short) }, [day.name, day.short])
   const [saved, setSaved] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [reorder, setReorder] = useState(false)
@@ -610,7 +622,7 @@ function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; ton
     const n = name.trim(), sh = short.trim().slice(0, 6)
     if (!n || !sh) { setName(day.name); setShort(day.short); return }
     if (n === day.name && sh === day.short) return
-    await renamePlanDay(day.id, n, sh)
+    await undoable(`${day.name} → ${n}`, () => renamePlanDay(day.id, n, sh))
     setSaved(true)
   }
   const blurOnEnter = (ev: { key: string; currentTarget: HTMLInputElement }) => { if (ev.key === 'Enter') ev.currentTarget.blur() }
@@ -619,7 +631,7 @@ function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; ton
     const j = i + d
     if (j < 0 || j >= ids.length) return
     ;[ids[i], ids[j]] = [ids[j], ids[i]]
-    reorderDay(day.id, ids)
+    undoable(`Moved ${list[i].name} ${d < 0 ? 'up' : 'down'}`, () => reorderDay(day.id, ids))
   }
 
   return (
@@ -655,7 +667,7 @@ function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; ton
               <li key={e.id} className={editing === e.id ? 'open' : ''} style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
                 {editing === e.id ? (
                   <ExerciseEditor e={e} dayShort={day.short} shared={shared} onClose={() => setEditing(null)}
-                    onRemove={async () => { await removeExerciseFromDay(day.id, e.id); setEditing(null) }} />
+                    onRemove={async () => { await undoable(`Removed ${e.name} from ${day.short}`, () => removeExerciseFromDay(day.id, e.id)); setEditing(null) }} />
                 ) : (
                   <>
                     <span className="st-dnum">{i + 1}</span>
@@ -689,7 +701,7 @@ function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; ton
 
       {dial && (
         <WeightDial e={dial} start="now" onClose={() => setDial(null)}
-          onSave={async (w, nw) => { await saveExercise(applyWeights(dial, w, nw)); setDial(null) }} />
+          onSave={async (w, nw) => { const next = applyWeights(dial, w, nw); await undoable(describeChange(dial, next), () => saveExercise(next)); setDial(null) }} />
       )}
     </div>
   )
@@ -717,7 +729,8 @@ function ExerciseEditor({ e, dayShort, shared, onClose, onRemove }: { e: Exercis
   const [rest, setRest] = useState<number>(e.restSec ?? 0) // 0 = use the default
   const save = async () => {
     if (!name.trim()) return
-    await saveExercise({ ...e, name: name.trim(), sets, reps, restSec: rest > 0 ? rest : undefined })
+    const next = { ...e, name: name.trim(), sets, reps, restSec: rest > 0 ? rest : undefined }
+    await undoable(describeChange(e, next), () => saveExercise(next))
     onClose()
   }
   return (
@@ -757,7 +770,7 @@ function AddToDay({ day, exercises, plan, onDone }: { day: PlanDay; exercises: E
   const create = async () => {
     const n = q.trim()
     if (!n) return
-    await addExerciseToDay(day.id, { id: `custom-${Date.now().toString(36)}`, name: n, sets, reps, weight: Number(weight) || 0, unit: 'kg', updatedAt: Date.now() })
+    await undoable(`Added ${n} to ${day.short}`, () => addExerciseToDay(day.id, { id: `custom-${Date.now().toString(36)}`, name: n, sets, reps, weight: Number(weight) || 0, unit: 'kg', updatedAt: Date.now() }))
     onDone()
   }
   return (
@@ -771,7 +784,7 @@ function AddToDay({ day, exercises, plan, onDone }: { day: PlanDay; exercises: E
           <p className="st-dadd-label">From your other days</p>
           <div className="st-dadd-hits">
             {hits.map((e, i) => (
-              <button key={e.id} style={{ animationDelay: `${i * 30}ms` }} onClick={async () => { await addExerciseToDay(day.id, e); onDone() }}>
+              <button key={e.id} style={{ animationDelay: `${i * 30}ms` }} onClick={async () => { await undoable(`Added ${e.name} to ${day.short}`, () => addExerciseToDay(day.id, e)); onDone() }}>
                 <b>{e.name}</b><small>{fmtWeight(e.weight)} {e.unit}{where(e.id) ? ` · ${where(e.id)}` : ''}</small>
               </button>
             ))}
@@ -806,7 +819,14 @@ function AiPanel() {
         <span />
         {has ? 'Ask AI and Scan label are ready' : 'Add the passcode to use Ask AI and Scan label'}
       </div>
-      <form onSubmit={(e) => { e.preventDefault(); setPass(value.trim()); setSaved(true) }}>
+      <form onSubmit={(e) => {
+        e.preventDefault()
+        const prev = getPass(), next = value.trim()
+        if (next === prev) return setSaved(true)
+        setPass(next)
+        setSaved(true)
+        recordUndo(next ? 'AI passcode saved' : 'AI passcode removed', () => { setPass(prev); setValue(prev); setSaved(false) })
+      }}>
         <div className="st-pass">
           <input type={show ? 'text' : 'password'} autoComplete="off" placeholder="AI passcode" value={value} onChange={(e) => { setValue(e.target.value); setSaved(false) }} aria-label="AI passcode" />
           <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide passcode' : 'Show passcode'}>{show ? 'Hide' : 'Show'}</button>
@@ -869,8 +889,8 @@ function BackupPanel() {
     if (!file) return
     try {
       const backup = parseBackup(await file.text())
-      if (!window.confirm(`Replace everything in RepFuel with the backup from ${backup.exportedAt.slice(0, 10)}? This can't be undone.`)) return
-      await restoreBackup(backup)
+      if (!window.confirm(`Replace everything in RepFuel with the backup from ${backup.exportedAt.slice(0, 10)}? You can undo it right after.`)) return
+      await undoable('Backup restored', () => restoreBackup(backup))
       setMsg(`Backup imported: ${backup.entries.length} logged items, ${backup.foods.length} foods`)
     } catch (err) {
       setMsg((err as Error).message)

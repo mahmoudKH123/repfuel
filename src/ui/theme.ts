@@ -42,7 +42,9 @@ export function useTheme(): [ThemeMode, (m: ThemeMode) => void] {
     } catch { /* private mode: applies for this visit only */ }
     setModeState(m)
     const next: Theme = m === 'auto' ? system() : m
-    if (next === theme) return
+    // Compare with what's on screen, not this render's state: an undo calls an older copy of this function.
+    const shown = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+    if (next === shown) { setTheme(next); return }
     const run = () => { apply(next); setTheme(next) }
     const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown }
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches

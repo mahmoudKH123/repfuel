@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { archiveFood, saveFood } from '../db/repo'
+import { undoable } from '../db/undo'
 import type { Food, FoodCategory, Unit } from '../db/types'
 import { CATEGORIES } from '../ui/format'
 import { autoKcal, kcalFromMacros, kcalLooksWrong } from '../logic/macros'
@@ -36,7 +37,7 @@ export function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => 
     if (!f.name.trim()) return setError('Enter a name.')
     if (!(base > 0)) return setError('Enter a base amount above 0.')
     if (f.kcal === '' || [m.kcal, m.protein, m.carbs, m.fat].some((v) => !(v >= 0))) return setError('Enter calories, and macros as numbers of 0 or more.')
-    await saveFood({
+    await undoable(food.id ? `Edited ${f.name.trim()}` : `Saved ${f.name.trim()}`, () => saveFood({
       ...(food as Food),
       name: f.name.trim(),
       category: f.category as FoodCategory,
@@ -48,13 +49,14 @@ export function FoodForm({ food, onDone }: { food: Partial<Food>; onDone: () => 
       // Saving after a check clears the review flag.
       needsReview: false,
       ...m,
-    })
+    }))
     onDone()
   }
 
   const remove = async () => {
     if (food.id && window.confirm(`Delete ${food.name}? Past logs keep their numbers.`)) {
-      await archiveFood(food.id)
+      const id = food.id
+      await undoable(`Deleted ${food.name}`, () => archiveFood(id))
       onDone()
     }
   }

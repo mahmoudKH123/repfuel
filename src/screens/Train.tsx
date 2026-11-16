@@ -5,7 +5,8 @@ import { db } from '../db/db'
 import type { Exercise, PlanDay, WeekPlan, WeightUnit } from '../db/types'
 import { addExerciseToDay, ensureWeek, getSettings, removeExerciseFromDay, saveExercise, saveWeek, setSetsDone, toggleExerciseDone } from '../db/repo'
 import { addDays } from '../logic/dates'
-import { applyWeights, cancelAttempt, fmtWeight, recordAttempt, restFor, startAttempt, tapSet, volumeKg } from '../logic/train'
+import { applyWeights, cancelAttempt, describeChange, fmtWeight, recordAttempt, restFor, startAttempt, tapSet, volumeKg } from '../logic/train'
+import { undoable } from '../db/undo'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, findFrom, missedDays, mondayOf, reshuffle, type Reshuffle } from '../logic/schedule'
 import { useCountUp, useFill } from '../ui/motion'
 import { WeightDial, type DialMode } from '../ui/WeightDial'
@@ -65,11 +66,12 @@ export function Train({ today }: { today: string }) {
     ? r.moved.slice(0, 2).map((m) => `${days.get(m.id)?.short ?? m.id} → ${WEEKDAYS[m.to]}`).join(', ')
     : 'Week updated'
 
-  const apply = async (next: WeekPlan, r: Reshuffle, msg?: string) => {
+  /** Saves a reshuffled week. `quiet`: a change you made (the undo pill says it), so no toast. */
+  const apply = async (next: WeekPlan, r: Reshuffle, msg?: string, quiet = false) => {
     if (r.drop.length) { setOverflow({ plan: next, r }); return }
     await saveWeek({ ...next, days: r.days }, today)
     setShuffleKey((k) => k + 1)
-    setToast(msg ? `${msg} · ${describe(r)}` : describe(r))
+    if (!quiet) setToast(msg ? `${msg} · ${describe(r)}` : describe(r))
   }
 
   // Auto-skip: a training day that passed with nothing ticked gets fitted into the rest of the week.
@@ -93,8 +95,12 @@ export function Train({ today }: { today: string }) {
   const nextIdx = wp.days.findIndex((d, i) => i > ti && d !== 'rest')
   const upNext = nextIdx >= 0 ? `${WEEKDAYS[nextIdx]} · ${nameOf(wp.days[nextIdx])}` : undefined
 
+  /** Undo of a tick brings that exercise back to the Now card and drops a finish screen it opened. */
+  const backTo = (id: string, prevRest: Rest | null) => () => { setPicked(id); setCelebrate(false); setRest(prevRest) }
   const toggle = async (id: string) => {
-    const justFinished = await toggleExerciseDone(today, dayId, id, list.map((e) => e.id))
+    const e = byId.get(id)
+    const justFinished = await undoable(`${done.has(id) ? 'Unticked' : 'Ticked'} ${e?.name ?? 'exercise'}`,
+      () => toggleExerciseDone(today, dayId, id, list.map((x) => x.id)), { onUndo: backTo(id, rest) })
     if (justFinished) { setRest(null); setCelebrate(true) }
   }
   const setsOf = (e: Exercise) => (done.has(e.id) ? e.sets : Math.min(session?.sets?.[e.id] ?? 0, e.sets))
@@ -103,7 +109,9 @@ export function Train({ today }: { today: string }) {
     const was = setsOf(e)
     const n = tapSet(was, k, e.sets)
     haptic()
-    const justFinished = await setSetsDone(today, dayId, e.id, n, e.sets, list.map((x) => x.id))
+    const label = n > was ? `${e.name} set ${n} of ${e.sets} done` : `${e.name} back to ${n} of ${e.sets} sets`
+    const justFinished = await undoable(label, () => setSetsDone(today, dayId, e.id, n, e.sets, list.map((x) => x.id)),
+      { onUndo: backTo(e.id, rest) })
     if (justFinished) { setRest(null); setCelebrate(true); return }
     if (n <= was) return
     if (n >= e.sets) moveOn(e.id)
@@ -116,7 +124,8 @@ export function Train({ today }: { today: string }) {
   /** With set tracking on, the big check does all sets at once (or clears them). */
   const checkAll = async (e: Exercise) => {
     const was = done.has(e.id)
-    const justFinished = await setSetsDone(today, dayId, e.id, was ? 0 : e.sets, e.sets, list.map((x) => x.id))
+    const justFinished = await undoable(`${was ? 'Unticked' : 'Ticked'} ${e.name}`,
+      () => setSetsDone(today, dayId, e.id, was ? 0 : e.sets, e.sets, list.map((x) => x.id)), { onUndo: backTo(e.id, rest) })
     if (justFinished) { setRest(null); setCelebrate(true) } else if (!was) moveOn(e.id)
   }
   const tick = (e: Exercise) => (tracking ? checkAll(e) : toggle(e.id).then(() => { if (!done.has(e.id)) moveOn(e.id) }))
@@ -130,7 +139,8 @@ export function Train({ today }: { today: string }) {
   /** Rest on a day = can't train: everything still owed is re-fitted into the open days. */
   const restOn = (i: number) => {
     const next = { ...wp, blocked: [...new Set([...wp.blocked, i])], declined: false }
-    apply(next, reshuffle(next, from, trained), i === ti ? 'Rest today' : `Rest ${WEEKDAYS[i]}`)
+    const r = reshuffle(next, from, trained)
+    undoable(`${i === ti ? 'Rest today' : `Rest ${WEEKDAYS[i]}`} · ${describe(r)}`, () => apply(next, r, undefined, true))
   }
   /** Put a workout on a day; if it's already on another day the two swap. */
   const setDay = async (i: number, id: string) => {
@@ -138,10 +148,10 @@ export function Train({ today }: { today: string }) {
     const j = findFrom(d, id, from)
     if (j >= 0 && j !== i) d[j] = d[i]
     d[i] = id
-    await saveWeek({
+    await undoable(`${WEEKDAYS[i]} → ${nameOf(id)}`, () => saveWeek({
       ...wp, days: d, blocked: wp.blocked.filter((b) => b !== i),
       owed: wp.owed.includes(id) ? wp.owed : [...wp.owed, id], dropped: wp.dropped.filter((x) => x !== id),
-    }, today)
+    }, today))
     setShuffleKey((k) => k + 1)
   }
   /** Straight back to the normal week (Settings, else the default), no questions: days already trained stay,
@@ -151,9 +161,8 @@ export function Train({ today }: { today: string }) {
     const d = normal.map((x, i) => (i < from ? (trained.get(i) ?? x) : x))
     const missed = d.flatMap((x, i) => (i < ti && x !== 'rest' && !trained.has(i) ? [i] : []))
     const owed = d.filter((x, i) => x !== 'rest' && i >= from)
-    await saveWeek({ ...wp, days: d, owed, blocked: [], dropped: [], missed, declined: false }, today)
+    await undoable('Back to your normal week', () => saveWeek({ ...wp, days: d, owed, blocked: [], dropped: [], missed, declined: false }, today))
     setShuffleKey((k) => k + 1)
-    setToast('Back to your normal week')
   }
 
   const current = (picked ? list.find((e) => e.id === picked) : undefined) ?? list.find((e) => !done.has(e.id))
@@ -179,7 +188,7 @@ export function Train({ today }: { today: string }) {
             <>
               <ul className="tr-list">
                 {list.map((e, i) => (
-                  <ExerciseCard key={e.id} e={e} index={i} onRemove={() => removeExerciseFromDay(day.id, e.id)} />
+                  <ExerciseCard key={e.id} e={e} index={i} onRemove={() => undoable(`Removed ${e.name} from ${day.short}`, () => removeExerciseFromDay(day.id, e.id))} />
                 ))}
               </ul>
               <AddExercise day={day} />
@@ -232,15 +241,14 @@ export function Train({ today }: { today: string }) {
           onSkip={async () => {
             const { plan: p, r } = overflow
             setOverflow(null)
-            await saveWeek({ ...p, days: r.days, dropped: [...p.dropped, ...r.drop] }, today)
+            await undoable(`Skipped ${r.drop.map(nameOf).join(', ')} this week`, () => saveWeek({ ...p, days: r.days, dropped: [...p.dropped, ...r.drop] }, today))
             setShuffleKey((k) => k + 1)
-            setToast(`${r.drop.map(nameOf).join(', ')} skipped this week`)
           }}
           onSelf={async () => {
             const p = overflow.plan
             setOverflow(null)
             const d = p.days.map((x, i) => (p.blocked.includes(i) || p.missed.includes(i) ? 'rest' : x))
-            await saveWeek({ ...p, days: d, declined: true }, today)
+            await undoable('Missed days set to rest', () => saveWeek({ ...p, days: d, declined: true }, today))
             setShuffleKey((k) => k + 1)
             setToast('Tap any day above to set its workout')
           }}
@@ -445,15 +453,17 @@ function NowCard({ e, pos, total, done, setsDone, onDot, onTick }: {
     return () => window.clearTimeout(t)
   }, [lvl])
 
+  /** Every change on the card is one undo step, worded by what changed. */
+  const change = (next: Exercise) => undoable(describeChange(e, next), () => saveExercise(next))
   const quickWeight = async (w: number) => {
     const from = e.weight
-    await saveExercise(applyWeights(e, w, undefined))
+    await change(applyWeights(e, w, undefined))
     if (w !== from) setLvl({ dir: w > from ? 'up' : 'down', from })
   }
-  const quick = (patch: Partial<Exercise>) => saveExercise({ ...e, ...patch, updatedAt: Date.now() })
+  const quick = (patch: Partial<Exercise>) => change({ ...e, ...patch, updatedAt: Date.now() })
   const saveDial = async (weight: number, nextWeight: number | undefined) => {
     const from = e.weight
-    await saveExercise(applyWeights(e, weight, nextWeight))
+    await change(applyWeights(e, weight, nextWeight))
     setDial(null)
     if (weight !== from) setLvl({ dir: weight > from ? 'up' : 'down', from })
   }
@@ -518,34 +528,27 @@ function Row({ e, index, done, setsDone, onTick, onPick }: {
 /* ---------- Progressive overload: the heavier weight you're working towards ---------- */
 
 function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from: number) => void; onEditGoal: () => void }) {
-  // Cancel: one tap when nothing is logged yet; with reps logged, the x first asks "Cancel?" for 3s.
-  const [ask, setAsk] = useState(false)
+  // Cancel is one tap: the app-wide undo brings the goal (and its reps) back.
   const [leaving, setLeaving] = useState(false)
-  useEffect(() => {
-    if (!ask) return
-    const id = window.setTimeout(() => setAsk(false), 3000)
-    return () => window.clearTimeout(id)
-  }, [ask])
+  const change = (next: Exercise, label = describeChange(e, next)) => undoable(label, () => saveExercise(next))
 
   if (!e.next) {
     if (!e.reps) return null
-    return <button className="tr-try" onClick={() => saveExercise(startAttempt(e))}>+ Try heavier</button>
+    return <button className="tr-try" onClick={() => change(startAttempt(e))}>+ Try heavier</button>
   }
   const cancel = () => {
     if (leaving) return
-    if (e.next?.reps && !ask) return setAsk(true)
-    setAsk(false)
     setLeaving(true)
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     // Let the drain + fold play out, then drop the goal.
-    window.setTimeout(async () => { await saveExercise(cancelAttempt(e)); setLeaving(false) }, reduced ? 0 : 560)
+    window.setTimeout(async () => { await change(cancelAttempt(e)); setLeaving(false) }, reduced ? 0 : 560)
   }
   const target = e.reps || 1
   const n = Math.min(e.next.reps, target)
   // Reps at the heavier weight save straight away; reaching the target levels up.
   const setReps = async (reps: number) => {
     const r = recordAttempt(e, reps)
-    await saveExercise(r.exercise)
+    await change(r.exercise, r.leveledUp ? `Level up · ${e.name} ${fmtWeight(r.from)} → ${fmtWeight(r.exercise.weight)} ${e.unit}` : undefined)
     if (r.leveledUp) onLevelUp(r.from)
   }
 
@@ -564,9 +567,8 @@ function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from:
         className="tr-ol-reps" size="small" value={n} step={1} min={0} max={target}
         label={`${e.name} reps at the heavier weight`} unit={`/${target}`} onCommit={setReps}
       />
-      <button className={`tr-ol-x${ask ? ' ask' : ''}`} onClick={cancel} aria-label={ask ? 'Tap again to cancel the heavier goal' : 'Cancel the heavier goal'}>
+      <button className="tr-ol-x" onClick={cancel} aria-label="Cancel the heavier goal">
         <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
-        <span>Cancel?</span>
       </button>
     </div>
   )
@@ -600,7 +602,7 @@ function ExerciseForm({ e, onDone, onSave }: { e?: Exercise; onDone: () => void;
   const x = fromDraft(d, { id })
   const save = async () => {
     if (!x) return
-    await (onSave ? onSave(x) : saveExercise(x))
+    await (onSave ? onSave(x) : e ? undoable(describeChange(e, x), () => saveExercise(x)) : saveExercise(x))
     onDone()
   }
   return (
@@ -633,7 +635,7 @@ function AddExercise({ day }: { day: PlanDay }) {
   if (!open) return <button className="tr-add" onClick={() => setOpen(true)}>+ Add exercise to {day.short}</button>
   return (
     <div className="card tr-add-card">
-      <ExerciseForm onDone={() => setOpen(false)} onSave={(x) => addExerciseToDay(day.id, x)} />
+      <ExerciseForm onDone={() => setOpen(false)} onSave={(x) => undoable(`Added ${x.name} to ${day.short}`, () => addExerciseToDay(day.id, x))} />
     </div>
   )
 }

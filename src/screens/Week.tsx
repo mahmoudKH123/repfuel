@@ -1,5 +1,6 @@
 import type { CSSProperties, KeyboardEvent } from 'react'
 import { setDayType } from '../db/repo'
+import { undoable } from '../db/undo'
 import { addDays, formatDay } from '../logic/dates'
 import { defaultDayType, type DaySummary } from '../logic/budget'
 import { useSettings, useWeek } from '../ui/hooks'
@@ -58,7 +59,10 @@ export function Week({ date, today, onDateChange, onOpenDay }: Props) {
             <DayRow
               key={d.date} day={d} index={i} today={today}
               onOpen={() => onOpenDay(d.date)}
-              onToggle={() => setDayType(d.date, d.type === 'training' ? 'rest' : 'training', defaultDayType(d.date, settings))}
+              onToggle={() => undoable(
+                `${formatDay(d.date)}: ${d.type === 'training' ? 'Training → Rest' : 'Rest → Training'}`,
+                () => setDayType(d.date, d.type === 'training' ? 'rest' : 'training', defaultDayType(d.date, settings)),
+              )}
             />
           ))}
         </ul>

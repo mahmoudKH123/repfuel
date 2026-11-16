@@ -3,6 +3,7 @@ import type { DayOverride, Entry, Exercise, Food, PlanDay, SettingRow, TrainSess
 import { SEED_EXERCISES, SEED_PLAN } from './workoutSeed'
 import { REMOVED_SEED_KEYS, SEED_FOODS, SEED_VERSION } from './seedFoods'
 import { DEFAULT_SETTINGS } from './defaults'
+import { undoMiddleware } from './undo'
 
 export class RepFuelDB extends Dexie {
   foods!: EntityTable<Food, 'id'>
@@ -37,6 +38,8 @@ export class RepFuelDB extends Dexie {
     })
     // v3: water drunk per day. Adds a table only; nothing existing changes.
     this.version(3).stores({ water: 'date' })
+    // Undo: remembers what a user action changed so it can be put back (see undo.ts). Not a schema change.
+    this.use(undoMiddleware(this))
   }
 }
 

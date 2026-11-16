@@ -74,3 +74,20 @@ export function tapSet(done: number, tapped: number, sets: number): number {
 export const restLeft = (endsAt: number, now = Date.now()) => Math.max(0, Math.ceil((endsAt - now) / 1000))
 
 export const fmtClock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+
+/** Short words for what changed on an exercise, for the undo pill: "Bench 60 → 62.5 kg", "Bench 3 → 4 sets". */
+export function describeChange(a: Exercise, b: Exercise): string {
+  const u = b.unit
+  if (a.name !== b.name) return `${a.name} → ${b.name}`
+  const parts: string[] = []
+  if (a.weight !== b.weight) parts.push(`${fmtWeight(a.weight)} → ${fmtWeight(b.weight)} ${u}`)
+  if (a.sets !== b.sets) parts.push(`${a.sets} → ${b.sets} sets`)
+  if (a.reps !== b.reps) parts.push(`${a.reps || 'fail'} → ${b.reps || 'fail'} reps`)
+  if (parts.length) return `${b.name} ${parts.join(', ')}`
+  if (!a.next && b.next) return `${b.name}: try ${fmtWeight(b.next.weight)} ${u}`
+  if (a.next && !b.next) return `${b.name}: heavier goal cancelled`
+  if (a.next && b.next && a.next.weight !== b.next.weight) return `${b.name} goal ${fmtWeight(a.next.weight)} → ${fmtWeight(b.next.weight)} ${u}`
+  if (a.next && b.next && a.next.reps !== b.next.reps) return `${b.name} ${fmtWeight(b.next.weight)} ${u}: ${a.next.reps} → ${b.next.reps} reps`
+  if (a.restSec !== b.restSec) return `${b.name} rest time`
+  return `Edited ${b.name}`
+}

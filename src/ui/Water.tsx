@@ -1,5 +1,6 @@
 import { useId, type CSSProperties } from 'react'
-import { addWater, undoWater } from '../db/repo'
+import { addWater } from '../db/repo'
+import { undoable } from '../db/undo'
 import { useCountUp, useFill } from './motion'
 import { Odometer } from './Odometer'
 
@@ -100,11 +101,8 @@ export function Water({ date, ml, sips, goal }: { date: string; ml: number; sips
       </svg>
       <div className="wt-actions">
         {DRINKS.map((d) => (
-          <button key={d} className="wt-add" onClick={() => addWater(date, d)}>+ {L(d)}</button>
+          <button key={d} className="wt-add" onClick={() => undoable(`+ ${L(d)} water`, () => addWater(date, d))}>+ {L(d)}</button>
         ))}
-        <button className="wt-undo" onClick={() => undoWater(date)} disabled={sips === 0} aria-label="Undo last drink">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
-        </button>
       </div>
     </section>
   )

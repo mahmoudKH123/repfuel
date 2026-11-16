@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyWeights, cancelAttempt, fmtClock, recordAttempt, restFor, restLeft, startAttempt, tapSet, volumeKg } from './train'
+import { applyWeights, cancelAttempt, describeChange, fmtClock, recordAttempt, restFor, restLeft, startAttempt, tapSet, volumeKg } from './train'
 import type { Exercise } from '../db/types'
 
 const ex: Exercise = { id: 'sp', name: 'Shoulder Press', sets: 3, reps: 10, weight: 55, unit: 'kg', next: { weight: 60, reps: 8 }, updatedAt: 0 }
@@ -62,5 +62,18 @@ describe('set tracking', () => {
     expect(restLeft(9_000, 10_000)).toBe(0)
     expect(fmtClock(95)).toBe('1:35')
     expect(fmtClock(5)).toBe('0:05')
+  })
+})
+
+describe('undo labels', () => {
+  const e: Exercise = { id: 'b', name: 'Bench', sets: 3, reps: 10, weight: 60, unit: 'kg', updatedAt: 0 }
+  it('says what changed', () => {
+    expect(describeChange(e, { ...e, weight: 62.5 })).toBe('Bench 60 → 62.5 kg')
+    expect(describeChange(e, { ...e, sets: 4, reps: 8 })).toBe('Bench 3 → 4 sets, 10 → 8 reps')
+    expect(describeChange(e, { ...e, name: 'Flat Bench' })).toBe('Bench → Flat Bench')
+    expect(describeChange(e, { ...e, next: { weight: 65, reps: 0 } })).toBe('Bench: try 65 kg')
+    expect(describeChange({ ...e, next: { weight: 65, reps: 4 } }, e)).toBe('Bench: heavier goal cancelled')
+    expect(describeChange({ ...e, next: { weight: 65, reps: 4 } }, { ...e, next: { weight: 65, reps: 5 } })).toBe('Bench 65 kg: 4 → 5 reps')
+    expect(describeChange(e, { ...e })).toBe('Edited Bench')
   })
 })

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
-import { deleteEntry, logFood, logQuick, saveFood } from '../db/repo'
+import { logFood, logQuick, saveFood } from '../db/repo'
+import { undoable } from '../db/undo'
 import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { autoKcal, defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
 import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type AiMeal, type MealItem } from '../logic/meal'
@@ -24,6 +25,11 @@ interface Props {
 }
 
 const k = (v: number) => Math.round(v).toLocaleString('en-US')
+/** Small line under an "Added" undo: calories left (or over) for the day after this item. */
+const leftAfter = (target: number, eaten: number, added: number) => {
+  const left = target - eaten - added
+  return `${k(Math.abs(left))} kcal ${left < 0 ? 'over' : 'left'}`
+}
 
 /** What the detail view is showing: a saved food, an AI result, or a blank manual entry. */
 interface Draft extends Macros {
@@ -82,7 +88,6 @@ export function AddFood({ date, today, onClose }: Props) {
   const [cat, setCat] = useState<FoodCategory | 'all' | 'review'>('all')
   const [view, setView] = useState<View>({ kind: 'home' })
   const [error, setError] = useState('')
-  const [toast, setToast] = useState<{ text: string; ids: number[] } | null>(null)
   // The plate: foods picked to log together, each with its amount. `round` restarts the counters for a fresh plate.
   const [plate, setPlate] = useState<{ id: number; amount: number }[]>([])
   const [round, setRound] = useState(0)
@@ -95,12 +100,6 @@ export function AddFood({ date, today, onClose }: Props) {
 
   // Each view starts at the top (the edit form otherwise opens where the detail was scrolled to).
   useEffect(() => { window.scrollTo(0, 0) }, [view.kind])
-
-  useEffect(() => {
-    if (!toast) return
-    const id = window.setTimeout(() => setToast(null), 5000)
-    return () => window.clearTimeout(id)
-  }, [toast])
 
   const byId = new Map(foods.map((f) => [f.id!, f]))
   const recent = recentIds.map((id) => byId.get(id)).filter((f): f is Food => !!f).slice(0, 8)
@@ -118,9 +117,11 @@ export function AddFood({ date, today, onClose }: Props) {
     draft: { source: 'saved', food: f, name: f.name, baseAmount: f.baseAmount, unit: f.unit, servingLabel: f.servingLabel ?? fmtAmount(f.baseAmount, f.unit), amount: defaultAmount(f), estimate: f.estimate, note: f.needsReview ? f.note ?? 'Check these numbers.' : undefined, ...labelGrams(f), kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat },
   })
 
-  const quickLog = async (f: Food) => {
-    const id = await logFood(date, f, defaultAmount(f))
-    setToast({ text: `${short(f.name)} added`, ids: [id] })
+  const quickLog = (f: Food) => {
+    const amount = defaultAmount(f)
+    return undoable(`Added ${short(f.name)}`, () => logFood(date, f, amount), {
+      detail: day ? leftAfter(day.target.kcal, day.eaten.kcal, scaleFood(f, amount).kcal) : undefined,
+    })
   }
 
   const onPlate = new Set(plate.map((p) => p.id))
@@ -131,9 +132,15 @@ export function AddFood({ date, today, onClose }: Props) {
     flyToPlate(from)
   }
   const plateItems = plate.map((p) => ({ ...p, food: byId.get(p.id) })).filter((p): p is { id: number; amount: number; food: Food } => !!p.food)
-  const logPlate = () => db.transaction('rw', db.entries, () => Promise.all(plateItems.map((p) => logFood(date, p.food, p.amount))))
-  const plateDone = (ids: number[]) => {
-    setToast({ text: `${ids.length} foods added`, ids })
+  const logPlate = () => {
+    const added = plateItems.reduce((t, p) => t + scaleFood(p.food, p.amount).kcal, 0)
+    return undoable(
+      (ids) => `Added ${ids.length} food${ids.length === 1 ? '' : 's'}`,
+      () => db.transaction('rw', db.entries, () => Promise.all(plateItems.map((p) => logFood(date, p.food, p.amount)))),
+      { detail: day ? leftAfter(day.target.kcal, day.eaten.kcal, added) : undefined },
+    )
+  }
+  const plateDone = () => {
     setPlate([])
     setRound((r) => r + 1)
   }
@@ -234,13 +241,12 @@ export function AddFood({ date, today, onClose }: Props) {
   })
 
   // After adding, stay on this page: a check plays, then you're back at the search with an Undo.
-  const finish = (id: number, name: string) => {
+  const finish = () => {
     setDone(true)
     window.setTimeout(() => {
       setDone(false)
       setQuery('')
       setView({ kind: 'home' })
-      setToast({ text: `${short(name)} added`, ids: [id] })
     }, 750)
   }
 
@@ -390,12 +396,6 @@ export function AddFood({ date, today, onClose }: Props) {
         />
       )}
 
-      {toast && (
-        <div key={toast.ids.join()} className="add-toast" role="status">
-          <span>{toast.text}{day && <small>{k(Math.abs(day.target.kcal - day.eaten.kcal))} kcal {day.eaten.kcal > day.target.kcal ? 'over' : 'left'}</small>}</span>
-          <button onClick={() => { toast.ids.forEach((id) => deleteEntry(id)); setToast(null) }}>Undo</button>
-        </div>
-      )}
 
       {done && (
         <div className="add-done" aria-live="polite">
@@ -681,22 +681,24 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
       const btn = document.querySelector('.add-dock .add-go')
       return toPlate(baseAmt, btn ?? document.body)
     }
-    let foodId = draft.food?.id
-    if (draft.source !== 'saved') {
-      // Keep the serving weight in the label, so this food can switch units next time too.
-      const gps = eff.gramsPerServing
-      const label = gps && !gramsFromLabel(eff.servingLabel)
-        ? eff.unit === 'serving' ? `${eff.servingLabel} (${Math.round(gps)}${eff.liquid ? 'ml' : 'g'})` : `1 serving, ${Math.round(gps)}${eff.liquid ? 'ml' : 'g'}`
-        : eff.servingLabel
-      if (save) foodId = await saveFood({
-        name: name.trim(),
-        category: draft.source === 'label' ? 'branded' : 'custom',
-        baseAmount: eff.baseAmount, unit: eff.unit, servingLabel: label,
-        estimate: draft.estimate, note: draft.note || undefined, ...base,
-      })
-    }
-    // Logged in the unit you picked (litres saved as ml), with macros already scaled.
-    const id = await logQuick(date, { name: name.trim(), foodId, estimate: draft.estimate, ...toStored(amt, unit), ...portion })
+    const id = await undoable(`Added ${short(name.trim())}`, async () => {
+      let foodId = draft.food?.id
+      if (draft.source !== 'saved') {
+        // Keep the serving weight in the label, so this food can switch units next time too.
+        const gps = eff.gramsPerServing
+        const label = gps && !gramsFromLabel(eff.servingLabel)
+          ? eff.unit === 'serving' ? `${eff.servingLabel} (${Math.round(gps)}${eff.liquid ? 'ml' : 'g'})` : `1 serving, ${Math.round(gps)}${eff.liquid ? 'ml' : 'g'}`
+          : eff.servingLabel
+        if (save) foodId = await saveFood({
+          name: name.trim(),
+          category: draft.source === 'label' ? 'branded' : 'custom',
+          baseAmount: eff.baseAmount, unit: eff.unit, servingLabel: label,
+          estimate: draft.estimate, note: draft.note || undefined, ...base,
+        })
+      }
+      // Logged in the unit you picked (litres saved as ml), with macros already scaled.
+      return logQuick(date, { name: name.trim(), foodId, estimate: draft.estimate, ...toStored(amt, unit), ...portion })
+    }, { detail: leftAfter(target, eaten, portion.kcal) })
     onDone(id, name.trim())
   }
 
@@ -854,12 +856,14 @@ function Meal({ name: initialName, initial, guessed, eaten, target, date, onDone
     if (on.some((i) => !(i.amount > 0))) return setError('Every ticked item needs an amount above 0.')
     if (on.some((i) => i.save && !i.name.trim())) return setError('Name the items you want to save.')
     setBusy(true)
-    for (const i of on) if (i.save && !i.food) await saveFood(toFood(i))
     const r1 = (n: number) => Math.round(n * 10) / 10
-    const id = await logQuick(date, {
-      name: name.trim(), amount: 1, unit: 'serving', estimate: on.some((i) => i.estimate),
-      kcal: Math.round(totals.kcal), protein: r1(totals.protein), carbs: r1(totals.carbs), fat: r1(totals.fat),
-    })
+    const id = await undoable(`Added ${short(name.trim())}`, async () => {
+      for (const i of on) if (i.save && !i.food) await saveFood(toFood(i))
+      return logQuick(date, {
+        name: name.trim(), amount: 1, unit: 'serving', estimate: on.some((i) => i.estimate),
+        kcal: Math.round(totals.kcal), protein: r1(totals.protein), carbs: r1(totals.carbs), fat: r1(totals.fat),
+      })
+    }, { detail: leftAfter(target, eaten, totals.kcal) })
     onDone(id, name.trim())
   }
 
