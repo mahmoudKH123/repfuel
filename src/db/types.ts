@@ -67,6 +67,10 @@ export interface Settings {
   avatar?: string
   /** The photo behind a photo avatar (at most 1280 px) and how it was framed, so it can be adjusted again. */
   avatarPhoto?: AvatarPhoto
+  /** Train page: tick each set and get a rest timer between sets (off = one check per exercise). */
+  setTracking?: boolean
+  /** Default rest between sets, in seconds (90 if never set). */
+  restSec?: number
 }
 
 /** u, v: centre of the kept circle as a share of the photo's width and height; zoom 1 = the circle just fits. */
@@ -99,6 +103,8 @@ export interface Exercise {
   /** Second weight for drop sets, e.g. wrist curls 55 then 30. */
   dropWeight?: number
   next?: Attempt
+  /** Rest between sets for this lift, in seconds; unset = the default from Settings. */
+  restSec?: number
   updatedAt: number
 }
 
@@ -116,6 +122,8 @@ export interface TrainSession {
   /** Plan day id that was trained. */
   dayId: string
   done: string[]
+  /** Sets ticked so far per exercise id (only used with set tracking on). */
+  sets?: Record<string, number>
   finishedAt?: number
 }
 

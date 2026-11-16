@@ -1,14 +1,19 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '../db/db'
 import type { Exercise, PlanDay, WeekPlan, WeightUnit } from '../db/types'
-import { addExerciseToDay, ensureWeek, getSettings, removeExerciseFromDay, saveExercise, saveWeek, toggleExerciseDone } from '../db/repo'
-import { addDays, formatDay } from '../logic/dates'
-import { applyWeights, cancelAttempt, fmtWeight, recordAttempt, startAttempt, volumeKg } from '../logic/train'
+import { addExerciseToDay, ensureWeek, getSettings, removeExerciseFromDay, saveExercise, saveWeek, setSetsDone, toggleExerciseDone } from '../db/repo'
+import { addDays } from '../logic/dates'
+import { applyWeights, cancelAttempt, fmtWeight, recordAttempt, restFor, startAttempt, tapSet, volumeKg } from '../logic/train'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, findFrom, missedDays, mondayOf, reshuffle, type Reshuffle } from '../logic/schedule'
 import { useCountUp, useFill } from '../ui/motion'
 import { WeightDial, type DialMode } from '../ui/WeightDial'
+import { Stepper } from '../ui/Stepper'
+import { PlateBar } from '../ui/PlateBar'
+import { RestTimer, loadRest, storeRest, type Rest } from '../ui/RestTimer'
+import { useSettings } from '../ui/hooks'
+import { haptic } from '../ui/haptic'
 
 const fmt = (v: number) => Math.round(v).toLocaleString('en-US')
 const FULL_DAY = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -28,6 +33,12 @@ export function Train({ today }: { today: string }) {
   const [overflow, setOverflow] = useState<Overflow | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [shuffleKey, setShuffleKey] = useState(0)
+  const settings = useSettings()
+  const tracking = !!settings?.setTracking
+  const [picked, setPicked] = useState<string | null>(null)
+  const [rest, setRestState] = useState<Rest | null>(loadRest)
+  const setRest = useCallback((r: Rest | null) => { storeRest(r); setRestState(r) }, [])
+  const endRest = useCallback(() => setRest(null), [setRest])
 
   useEffect(() => { ensureWeek(week, today) }, [week, today])
   useEffect(() => {
@@ -84,7 +95,36 @@ export function Train({ today }: { today: string }) {
 
   const toggle = async (id: string) => {
     const justFinished = await toggleExerciseDone(today, dayId, id, list.map((e) => e.id))
-    if (justFinished) setCelebrate(true)
+    if (justFinished) { setRest(null); setCelebrate(true) }
+  }
+  const setsOf = (e: Exercise) => (done.has(e.id) ? e.sets : Math.min(session?.sets?.[e.id] ?? 0, e.sets))
+  /** Set tracking: tap a set dot. A new set ticked starts the rest timer (unless the workout just ended). */
+  const tapDot = async (e: Exercise, k: number) => {
+    const was = setsOf(e)
+    const n = tapSet(was, k, e.sets)
+    haptic()
+    const justFinished = await setSetsDone(today, dayId, e.id, n, e.sets, list.map((x) => x.id))
+    if (justFinished) { setRest(null); setCelebrate(true); return }
+    if (n <= was) return
+    if (n >= e.sets) moveOn(e.id)
+    const i = list.indexOf(e)
+    const after = list.slice(i + 1).concat(list.slice(0, i)).find((x) => !done.has(x.id) && x.id !== e.id)
+    const next = n < e.sets ? `${e.name} · set ${n + 1} of ${e.sets}` : after ? after.name : 'Last sets'
+    const total = restFor(e, settings?.restSec)
+    setRest({ endsAt: Date.now() + total * 1000, total, next })
+  }
+  /** With set tracking on, the big check does all sets at once (or clears them). */
+  const checkAll = async (e: Exercise) => {
+    const was = done.has(e.id)
+    const justFinished = await setSetsDone(today, dayId, e.id, was ? 0 : e.sets, e.sets, list.map((x) => x.id))
+    if (justFinished) { setRest(null); setCelebrate(true) } else if (!was) moveOn(e.id)
+  }
+  const tick = (e: Exercise) => (tracking ? checkAll(e) : toggle(e.id).then(() => { if (!done.has(e.id)) moveOn(e.id) }))
+  /** The finished exercise leaves the Now card after its check has played; the next open one slides in. */
+  const moveOn = (id: string) => window.setTimeout(() => setPicked((p) => (p === id || p === null ? null : p)), 650)
+  const pick = (id: string) => {
+    setPicked(id)
+    window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
   }
 
   /** Rest on a day = can't train: everything still owed is re-fitted into the open days. */
@@ -116,20 +156,11 @@ export function Train({ today }: { today: string }) {
     setToast('Back to your normal week')
   }
 
-  return (
-    <section className="td tr">
-      <header className="td-head">
-        <div className="td-date">
-          <h1>Train</h1>
-          <span>{formatDay(today, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
-        </div>
-        {day && (
-          <button className={`td-back tr-edit${editing ? ' on' : ''}`} onClick={() => setEditing((v) => !v)}>
-            {editing ? 'Done' : 'Edit'}
-          </button>
-        )}
-      </header>
+  const current = (picked ? list.find((e) => e.id === picked) : undefined) ?? list.find((e) => !done.has(e.id))
+  const finished = !!session?.finishedAt
 
+  return (
+    <section className={`td tr${tracking && rest ? ' resting' : ''}`}>
       <WeekStrip
         wp={wp} ti={ti} trained={trained} todayId={dayId} shuffleKey={shuffleKey} days={days}
         onOpen={(i) => setSheet(i)}
@@ -143,23 +174,46 @@ export function Train({ today }: { today: string }) {
         />
       ) : (
         <div key={dayId} className="tr-body">
-          <Hero day={day} list={list} done={done.size} finished={!!session?.finishedAt} nextName={upNext} />
-          {!trainedToday && !editing && (
-            <button className="tr-skip" onClick={() => restOn(ti)}>
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
-              Can&apos;t train today
-            </button>
+          <Hero day={day} list={list} done={done.size} finished={finished} editing={editing} onEdit={() => setEditing((v) => !v)} />
+          {editing ? (
+            <>
+              <ul className="tr-list">
+                {list.map((e, i) => (
+                  <ExerciseCard key={e.id} e={e} index={i} onRemove={() => removeExerciseFromDay(day.id, e.id)} />
+                ))}
+              </ul>
+              <AddExercise day={day} />
+            </>
+          ) : (
+            <>
+              {current ? (
+                <NowCard
+                  key={current.id} e={current} pos={list.indexOf(current) + 1} total={list.length} done={done.has(current.id)}
+                  setsDone={tracking ? setsOf(current) : null}
+                  onDot={(k) => tapDot(current, k)} onTick={() => tick(current)}
+                />
+              ) : (
+                <DoneCard list={list} />
+              )}
+              <ul className="tr-rows">
+                {list.filter((e) => e.id !== current?.id).map((e, i) => (
+                  <Row
+                    key={e.id} e={e} index={i} done={done.has(e.id)} setsDone={tracking ? setsOf(e) : null}
+                    onTick={() => (tracking ? checkAll(e) : toggle(e.id))} onPick={() => pick(e.id)}
+                  />
+                ))}
+              </ul>
+              <div className="tr-foot">
+                {upNext && <span>Up next · {upNext}</span>}
+                {!trainedToday && (
+                  <button className="tr-skip" onClick={() => restOn(ti)}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
+                    Can&apos;t train today
+                  </button>
+                )}
+              </div>
+            </>
           )}
-          <ul className="tr-list">
-            {list.map((e, i) => (
-              <ExerciseCard
-                key={e.id} e={e} index={i} done={done.has(e.id)} editing={editing}
-                onToggle={() => toggle(e.id)}
-                onRemove={() => removeExerciseFromDay(day.id, e.id)}
-              />
-            ))}
-          </ul>
-          {editing && <AddExercise day={day} />}
         </div>
       )}
 
@@ -192,7 +246,8 @@ export function Train({ today }: { today: string }) {
           }}
         />
       )}
-      {toast && createPortal(<div className="tr-toast" role="status">{toast}</div>, document.body)}
+      {tracking && rest && !celebrate && <RestTimer rest={rest} onChange={setRest} onEnd={endRest} />}
+      {toast && createPortal(<div className={`tr-toast${tracking && rest ? ' up' : ''}`} role="status">{toast}</div>, document.body)}
       {celebrate && day && <Celebration name={day.name} list={list} onClose={() => setCelebrate(false)} />}
     </section>
   )
@@ -294,29 +349,36 @@ function OverflowSheet({ names, onSkip, onSelf }: { names: string[]; onSkip: () 
 
 /* ---------- Summary: straight on the page, like Today ---------- */
 
-function Hero({ day, list, done, finished, nextName }: { day: PlanDay; list: Exercise[]; done: number; finished: boolean; nextName?: string }) {
+function Hero({ day, list, done, finished, editing, onEdit }: {
+  day: PlanDay; list: Exercise[]; done: number; finished: boolean; editing: boolean; onEdit: () => void
+}) {
   const total = list.length
   const fill = useFill(total ? done / total : 0)
-  const shown = useCountUp(finished ? volumeKg(list) : done, finished ? 1000 : 500)
   const sets = list.reduce((t, e) => t + e.sets, 0)
   return (
     <div className={`tr-sum${finished ? ' finished' : ''}`}>
-      <span className="tr-day">{finished && <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}{day.name}</span>
-      {finished ? (
-        <>
-          <p className="td-big">{fmt(shown)}</p>
-          <p className="td-cap">kg lifted <span>· workout complete</span></p>
-        </>
-      ) : (
-        <>
-          <p className="td-big">{Math.round(shown)}<span className="tr-of">/{total}</span></p>
-          <p className="td-cap">exercises done <span>· {sets} sets</span></p>
-        </>
-      )}
+      <div className="tr-sum-top">
+        <h1 className="tr-word">
+          {finished && <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
+          {day.name}
+        </h1>
+        <button className={`td-back tr-edit${editing ? ' on' : ''}`} onClick={onEdit}>{editing ? 'Done' : 'Edit'}</button>
+      </div>
+      <p className="tr-sum-meta"><b>{done}</b> of {total} done <span>· {sets} sets</span></p>
       <div className="td-bar tr-bar" role="progressbar" aria-label="Exercises done" aria-valuenow={done} aria-valuemax={total}>
         <span style={{ width: `${fill * 100}%` }} />
       </div>
-      {nextName && <p className="tr-upnext">Up next · {nextName}</p>}
+    </div>
+  )
+}
+
+/** Every exercise done: the Now card turns into the day's total. */
+function DoneCard({ list }: { list: Exercise[] }) {
+  const kg = useCountUp(volumeKg(list), 1000)
+  return (
+    <div className="tr-now tr-now-done">
+      <span className="tr-now-tag">Workout done</span>
+      <p className="tr-now-big">{fmt(kg)}<small>kg lifted</small></p>
     </div>
   )
 }
@@ -349,24 +411,46 @@ function weightText(e: Exercise) {
   return `${w} ${e.unit}`
 }
 
-function ExerciseCard({ e, index, done, editing, onToggle, onRemove }: {
-  e: Exercise; index: number; done: boolean; editing: boolean; onToggle: () => void; onRemove: () => void
-}) {
+/** Edit mode: remove from the day, or open the full form. */
+function ExerciseCard({ e, index, onRemove }: { e: Exercise; index: number; onRemove: () => void }) {
   const [form, setForm] = useState(false)
+  return (
+    <li className="tr-ex" style={{ animationDelay: `${80 + index * 45}ms` }}>
+      <div className="tr-ex-main">
+        <button className="tr-remove" onClick={onRemove} aria-label={`Remove ${e.name} from this day`}>−</button>
+        <button className="tr-ex-text" onClick={() => setForm((v) => !v)}>
+          <strong>{e.name}</strong>
+          <span className="tr-meta"><b>{e.sets} × {e.reps || 'failure'}</b><span>{weightText(e)}</span></span>
+        </button>
+        <span className="tr-chev" aria-hidden>{form ? '⌃' : '›'}</span>
+      </div>
+      {form && <ExerciseForm e={e} onDone={() => setForm(false)} />}
+    </li>
+  )
+}
+
+/** The exercise you're on: big numbers you drag or tap, big set dots, the heavier goal. */
+function NowCard({ e, pos, total, done, setsDone, onDot, onTick }: {
+  e: Exercise; pos: number; total: number; done: boolean
+  /** Sets ticked (set tracking on), or null when it's off. */
+  setsDone: number | null
+  onDot: (k: number) => void; onTick: () => void
+}) {
   // Weight before a level change, while the card animation shows.
   const [lvl, setLvl] = useState<{ dir: 'up' | 'down'; from: number } | null>(null)
   const [dial, setDial] = useState<DialMode | null>(null)
-  const [pop, setPop] = useState(false)
   useEffect(() => {
     if (lvl === null) return
     const t = window.setTimeout(() => setLvl(null), 2600)
     return () => window.clearTimeout(t)
   }, [lvl])
 
-  const check = () => {
-    if (!done) { setPop(true); window.setTimeout(() => setPop(false), 600) }
-    onToggle()
+  const quickWeight = async (w: number) => {
+    const from = e.weight
+    await saveExercise(applyWeights(e, w, undefined))
+    if (w !== from) setLvl({ dir: w > from ? 'up' : 'down', from })
   }
+  const quick = (patch: Partial<Exercise>) => saveExercise({ ...e, ...patch, updatedAt: Date.now() })
   const saveDial = async (weight: number, nextWeight: number | undefined) => {
     const from = e.weight
     await saveExercise(applyWeights(e, weight, nextWeight))
@@ -375,36 +459,58 @@ function ExerciseCard({ e, index, done, editing, onToggle, onRemove }: {
   }
 
   return (
-    <li className={`tr-ex${done ? ' done' : ''}${lvl ? ` lvl ${lvl.dir}` : ''}`} style={{ animationDelay: `${80 + index * 45}ms` }}>
-      <div className="tr-ex-main">
-        {!editing ? (
-          <button className={`tr-check${done ? ' on' : ''}${pop ? ' pop' : ''}`} onClick={check} aria-pressed={done} aria-label={`${e.name} ${done ? 'done' : 'not done'}`}>
-            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-          </button>
-        ) : (
-          <button className="tr-remove" onClick={onRemove} aria-label={`Remove ${e.name} from this day`}>−</button>
-        )}
-        <button className="tr-ex-text" onClick={editing ? () => setForm((v) => !v) : check}>
-          <strong>{e.name}</strong>
-          <span className="tr-meta"><b>{e.sets} × {e.reps || 'failure'}</b>{editing && <span>{weightText(e)}</span>}</span>
-        </button>
-        {editing ? (
-          <span className="tr-chev" aria-hidden>{form ? '⌃' : '›'}</span>
-        ) : (
-          <button className="tr-wpill" onClick={() => setDial('now')} aria-label={`${e.name} weight ${weightText(e)}, tap to change`}>
-            <span key={e.weight} className={`tr-w ${lvl?.dir ?? 'up'}`}>{weightText(e)}</span>
-            <svg width="10" height="14" viewBox="0 0 10 14" aria-hidden><path d="M2 5l3-3 3 3M2 9l3 3 3-3" /></svg>
-          </button>
-        )}
+    <div className={`tr-ex tr-now${done ? ' done' : ''}${lvl ? ` lvl ${lvl.dir}` : ''}`}>
+      <span className="tr-now-tag">{done ? 'Done' : 'Now'} · {pos} of {total}</span>
+      <h2 className="tr-now-name">{e.name}</h2>
+      <PlateBar key={e.unit} weight={e.weight} unit={e.unit} label={`${e.name} weight`} onCommit={quickWeight} onOpen={() => setDial('now')} />
+      {e.dropWeight ? <p className="tr-now-drop">then drop to {fmtWeight(e.dropWeight)} {e.unit}</p> : null}
+      <div className="tr-now-sr">
+        <Stepper value={e.sets} step={1} min={1} max={12} label={`${e.name} sets`} unit="sets" onCommit={(n) => quick({ sets: n })} />
+        <span className="tr-now-x" aria-hidden>×</span>
+        <Stepper value={e.reps} step={1} min={0} max={50} label={`${e.name} reps`} show={(n) => (n ? String(n) : 'fail')}
+          unit="reps" onCommit={(n) => quick({ reps: n })} />
       </div>
-      {lvl && (
-        <div className={`tr-lvl-badge ${lvl.dir}`}>
-          Level {lvl.dir} · {fmtWeight(lvl.from)} → {fmtWeight(e.weight)} {e.unit}
+      {lvl && <div className={`tr-lvl-badge ${lvl.dir}`}>Level {lvl.dir} · {fmtWeight(lvl.from)} → {fmtWeight(e.weight)} {e.unit}</div>}
+      {setsDone !== null ? (
+        <div className="tr-sets" role="group" aria-label={`${e.name} sets`}>
+          {Array.from({ length: e.sets }, (_, k) => (
+            <button
+              key={k} className={`tr-set${k < setsDone ? ' on' : ''}${k === setsDone ? ' next' : ''}`}
+              onClick={() => onDot(k)} aria-pressed={k < setsDone} aria-label={`Set ${k + 1} ${k < setsDone ? 'done' : 'not done'}`}
+            >
+              {k < setsDone
+                ? <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                : k + 1}
+            </button>
+          ))}
         </div>
+      ) : (
+        <button className={`tr-now-go${done ? ' on' : ''}`} onClick={() => { haptic(); onTick() }} aria-pressed={done}>
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+          {done ? 'Done' : 'Mark done'}
+        </button>
       )}
-      {!editing && <Overload e={e} onLevelUp={(from) => setLvl({ dir: 'up', from })} onEditGoal={() => setDial('next')} />}
-      {editing && form && <ExerciseForm e={e} onDone={() => setForm(false)} />}
+      <Overload e={e} onLevelUp={(from) => setLvl({ dir: 'up', from })} onEditGoal={() => setDial('next')} />
       {dial && <WeightDial e={e} start={dial} onClose={() => setDial(null)} onSave={saveDial} />}
+    </div>
+  )
+}
+
+/** One line per other exercise: tick it, or tap it to make it the Now card. */
+function Row({ e, index, done, setsDone, onTick, onPick }: {
+  e: Exercise; index: number; done: boolean; setsDone: number | null; onTick: () => void; onPick: () => void
+}) {
+  const part = setsDone !== null && !done && setsDone > 0
+  return (
+    <li className={`tr-row${done ? ' done' : ''}`} style={{ animationDelay: `${120 + index * 35}ms` }}>
+      <button className={`tr-check${done ? ' on' : ''}`} onClick={() => { haptic(); onTick() }} aria-pressed={done} aria-label={`${e.name} ${done ? 'done' : 'not done'}`}>
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+      </button>
+      <button className="tr-row-main" onClick={onPick}>
+        <strong>{e.name}</strong>
+        <span>{part ? `${setsDone} of ${e.sets} sets` : `${e.sets} × ${e.reps || 'fail'}`}</span>
+      </button>
+      <span className="tr-row-w">{fmtWeight(e.weight)}<small>{e.unit}</small></span>
     </li>
   )
 }
@@ -412,8 +518,6 @@ function ExerciseCard({ e, index, done, editing, onToggle, onRemove }: {
 /* ---------- Progressive overload: the heavier weight you're working towards ---------- */
 
 function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from: number) => void; onEditGoal: () => void }) {
-  const [open, setOpen] = useState(false)
-  const [reps, setReps] = useState(e.next?.reps ?? 0)
   // Cancel: one tap when nothing is logged yet; with reps logged, the x first asks "Cancel?" for 3s.
   const [ask, setAsk] = useState(false)
   const [leaving, setLeaving] = useState(false)
@@ -434,49 +538,36 @@ function Overload({ e, onLevelUp, onEditGoal }: { e: Exercise; onLevelUp: (from:
     setLeaving(true)
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     // Let the drain + fold play out, then drop the goal.
-    window.setTimeout(async () => { await saveExercise(cancelAttempt(e)); setLeaving(false); setOpen(false) }, reduced ? 0 : 560)
+    window.setTimeout(async () => { await saveExercise(cancelAttempt(e)); setLeaving(false) }, reduced ? 0 : 560)
   }
   const target = e.reps || 1
-  const n = Math.min(open ? reps : e.next.reps, target)
-  const save = async () => {
+  const n = Math.min(e.next.reps, target)
+  // Reps at the heavier weight save straight away; reaching the target levels up.
+  const setReps = async (reps: number) => {
     const r = recordAttempt(e, reps)
     await saveExercise(r.exercise)
-    setOpen(false)
     if (r.leveledUp) onLevelUp(r.from)
   }
-  const hits = reps >= target
 
   return (
-    <div className={`tr-ol${open ? ' open' : ''}${leaving ? ' leaving' : ''}`} style={{ '--n': target } as CSSProperties}>
-      <div className="tr-ol-top">
-      <button className="tr-ol-row" onClick={() => { setReps(e.next?.reps ?? 0); setOpen((v) => !v) }} aria-expanded={open}>
-        <span className="tr-ol-w">
-          <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" /></svg>
-          {fmtWeight(e.next.weight)} {e.unit}
-        </span>
-        <span className="tr-ol-bar" style={{ '--n': target } as CSSProperties} aria-label={`${e.next.reps} of ${target} reps`}>
-          {Array.from({ length: target }, (_, i) => (
-            <i key={i} className={i < n ? 'on' : ''} style={{ animationDelay: leaving ? `${(target - 1 - i) * 22}ms` : `${200 + i * 40}ms` }} />
-          ))}
-        </span>
-        <span className="tr-ol-n">{(open ? reps : e.next.reps) ? <><b>{open ? reps : e.next.reps}</b>/{target}</> : 'new'}</span>
+    <div className={`tr-ol${leaving ? ' leaving' : ''}`} style={{ '--n': target } as CSSProperties}>
+      <button className="tr-ol-goal" onClick={onEditGoal} aria-label={`Heavier goal ${fmtWeight(e.next.weight)} ${e.unit}, change`}>
+        <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" /></svg>
+        {fmtWeight(e.next.weight)}<small>{e.unit}</small>
       </button>
+      <span className="tr-ol-bar" style={{ '--n': target } as CSSProperties} aria-hidden>
+        {Array.from({ length: target }, (_, i) => (
+          <i key={i} className={i < n ? 'on' : ''} style={{ animationDelay: leaving ? `${(target - 1 - i) * 22}ms` : `${i * 25}ms` }} />
+        ))}
+      </span>
+      <Stepper
+        className="tr-ol-reps" size="small" value={n} step={1} min={0} max={target}
+        label={`${e.name} reps at the heavier weight`} unit={`/${target}`} onCommit={setReps}
+      />
       <button className={`tr-ol-x${ask ? ' ask' : ''}`} onClick={cancel} aria-label={ask ? 'Tap again to cancel the heavier goal' : 'Cancel the heavier goal'}>
         <svg width="10" height="10" viewBox="0 0 24 24" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
         <span>Cancel?</span>
       </button>
-      </div>
-      {open && !leaving && (
-        <div className="tr-ol-edit">
-          <button className="tr-ol-goal" onClick={onEditGoal} aria-label="Change goal weight">Reps at <b>{fmtWeight(e.next.weight)}{e.unit}</b></button>
-          <div className="tr-ol-step">
-            <button onClick={() => setReps((r) => Math.max(0, r - 1))} aria-label="One rep less">−</button>
-            <b key={reps}>{reps}</b>
-            <button onClick={() => setReps((r) => r + 1)} aria-label="One rep more">+</button>
-          </div>
-          <button className={`primary small${hits ? ' tr-ol-go' : ''}`} onClick={save}>{hits ? 'Level up' : 'Save'}</button>
-        </div>
-      )}
     </div>
   )
 }

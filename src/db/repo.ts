@@ -133,12 +133,36 @@ export async function toggleExerciseDone(date: string, dayId: string, exerciseId
   return db.transaction('rw', db.sessions, async () => {
     const s = (await db.sessions.get(date)) ?? { date, dayId, done: [] }
     const set = new Set(s.dayId === dayId ? s.done : [])
-    if (set.has(exerciseId)) set.delete(exerciseId)
+    const sets = { ...(s.dayId === dayId ? s.sets : undefined) }
+    if (set.has(exerciseId)) { set.delete(exerciseId); delete sets[exerciseId] }
     else set.add(exerciseId)
     const done = all.filter((id) => set.has(id))
     const finished = all.length > 0 && done.length === all.length
     const was = s.dayId === dayId ? s.finishedAt : undefined
-    await db.sessions.put({ date, dayId, done, finishedAt: finished ? (was ?? Date.now()) : undefined })
+    await db.sessions.put({ date, dayId, done, ...(Object.keys(sets).length ? { sets } : {}), finishedAt: finished ? (was ?? Date.now()) : undefined })
+    return finished && !was
+  })
+}
+
+/**
+ * Set tracking: stores how many sets of an exercise are done. All sets done ticks the exercise,
+ * fewer un-ticks it. Returns true when this finished the whole workout.
+ */
+export async function setSetsDone(date: string, dayId: string, exerciseId: string, count: number, total: number, all: string[]): Promise<boolean> {
+  return db.transaction('rw', db.sessions, async () => {
+    const s = (await db.sessions.get(date)) ?? { date, dayId, done: [] }
+    const same = s.dayId === dayId
+    const set = new Set(same ? s.done : [])
+    const sets = { ...(same ? s.sets : undefined) }
+    const n = Math.max(0, Math.min(count, total))
+    if (n > 0) sets[exerciseId] = n
+    else delete sets[exerciseId]
+    if (n >= total) set.add(exerciseId)
+    else set.delete(exerciseId)
+    const done = all.filter((id) => set.has(id))
+    const finished = all.length > 0 && done.length === all.length
+    const was = same ? s.finishedAt : undefined
+    await db.sessions.put({ date, dayId, done, ...(Object.keys(sets).length ? { sets } : {}), finishedAt: finished ? (was ?? Date.now()) : undefined })
     return finished && !was
   })
 }

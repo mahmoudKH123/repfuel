@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyWeights, cancelAttempt, recordAttempt, startAttempt, volumeKg } from './train'
+import { applyWeights, cancelAttempt, fmtClock, recordAttempt, restFor, restLeft, startAttempt, tapSet, volumeKg } from './train'
 import type { Exercise } from '../db/types'
 
 const ex: Exercise = { id: 'sp', name: 'Shoulder Press', sets: 3, reps: 10, weight: 55, unit: 'kg', next: { weight: 60, reps: 8 }, updatedAt: 0 }
@@ -42,4 +42,25 @@ describe('weight dial', () => {
   it('a new goal weight starts at 0 reps', () => expect(applyWeights(ex, 55, 62.5).next).toEqual({ weight: 62.5, reps: 0 }))
   it('pushes the goal above the working weight', () => expect(applyWeights(ex, 60, 60).next).toEqual({ weight: 65, reps: 0 }))
   it('leaves exercises with no goal alone', () => expect(applyWeights({ ...ex, next: undefined }, 57.5, undefined).next).toBeUndefined())
+})
+
+describe('set tracking', () => {
+  it('ticks up to the tapped set, un-ticks from a done one', () => {
+    expect(tapSet(0, 0, 3)).toBe(1)
+    expect(tapSet(1, 2, 3)).toBe(3)
+    expect(tapSet(3, 2, 3)).toBe(2)
+    expect(tapSet(2, 0, 3)).toBe(0)
+    expect(tapSet(0, 9, 3)).toBe(3)
+  })
+  it('uses the lift rest, then the default, then 90 s', () => {
+    expect(restFor({ restSec: 120 }, 60)).toBe(120)
+    expect(restFor({}, 60)).toBe(60)
+    expect(restFor({})).toBe(90)
+  })
+  it('counts rest down in whole seconds and formats it', () => {
+    expect(restLeft(10_500, 10_000)).toBe(1)
+    expect(restLeft(9_000, 10_000)).toBe(0)
+    expect(fmtClock(95)).toBe('1:35')
+    expect(fmtClock(5)).toBe('0:05')
+  })
 })

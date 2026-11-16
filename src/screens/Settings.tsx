@@ -11,7 +11,7 @@ import { weeklyWeights } from '../logic/weight'
 import { dayType } from '../logic/budget'
 import { kcalFromMacros, sum } from '../logic/macros'
 import { DEFAULT_WEEK, WEEKDAYS, dayIndex, mondayOf } from '../logic/schedule'
-import { applyWeights, fmtWeight } from '../logic/train'
+import { DEFAULT_REST, applyWeights, fmtClock, fmtWeight } from '../logic/train'
 import { getPass, setPass } from '../logic/ai'
 import { searchByName } from '../logic/search'
 import { useSettings } from '../ui/hooks'
@@ -503,8 +503,26 @@ function TrainingPanel({ today, settings, plan }: { today: string; settings: Set
       on={days.flatMap((d, j) => (d === opened.id ? [WEEKDAYS[j]] : []))} onBack={() => setOpenDay(null)} />
   }
 
+  const tracking = !!settings.setTracking
+  const restSec = settings.restSec ?? DEFAULT_REST
   return (
     <div className="st-training">
+      <h3 className="st-h">During a workout</h3>
+      <label className="st-toggle st-toggle-first">
+        <input type="checkbox" checked={tracking} onChange={(ev) => saveSettings({ ...settings, setTracking: ev.target.checked })} />
+        <span aria-hidden />
+        Set by set + rest timer
+      </label>
+      {tracking && (
+        <div className="st-rest">
+          <Mini label="Rest between sets" value={restSec} min={15} step={15} show={fmtClock}
+            onChange={(n) => saveSettings({ ...settings, restSec: n })} />
+        </div>
+      )}
+      <p className="st-note">{tracking
+        ? 'Tick each set on the Train page and a rest timer starts. When it ends the screen flashes, no sound.'
+        : 'Off: one check per exercise.'}</p>
+
       <h3 className="st-h">Your normal week</h3>
       <div className="st-week">
         {days.map((d, i) => (
@@ -677,14 +695,14 @@ function DayPage({ day, tone, plan, exercises, on, onBack }: { day: PlanDay; ton
   )
 }
 
-function Mini({ label, value, min, onChange, show }: { label: string; value: number; min: number; onChange: (n: number) => void; show?: (n: number) => string }) {
+function Mini({ label, value, min, step = 1, onChange, show }: { label: string; value: number; min: number; step?: number; onChange: (n: number) => void; show?: (n: number) => string }) {
   return (
     <div className="st-step">
       <span>{label}</span>
       <div>
-        <button type="button" onClick={() => onChange(Math.max(min, value - 1))} disabled={value <= min} aria-label={`Less ${label}`}>−</button>
+        <button type="button" onClick={() => onChange(Math.max(min, value - step))} disabled={value <= min} aria-label={`Less ${label}`}>−</button>
         <b key={value}>{show ? show(value) : value}</b>
-        <button type="button" onClick={() => onChange(value + 1)} aria-label={`More ${label}`}>+</button>
+        <button type="button" onClick={() => onChange(value + step)} aria-label={`More ${label}`}>+</button>
       </div>
     </div>
   )
@@ -695,9 +713,11 @@ function ExerciseEditor({ e, dayShort, shared, onClose, onRemove }: { e: Exercis
   const [name, setName] = useState(e.name)
   const [sets, setSets] = useState(e.sets)
   const [reps, setReps] = useState(e.reps)
+  const settings = useSettings()
+  const [rest, setRest] = useState<number>(e.restSec ?? 0) // 0 = use the default
   const save = async () => {
     if (!name.trim()) return
-    await saveExercise({ ...e, name: name.trim(), sets, reps })
+    await saveExercise({ ...e, name: name.trim(), sets, reps, restSec: rest > 0 ? rest : undefined })
     onClose()
   }
   return (
@@ -707,6 +727,12 @@ function ExerciseEditor({ e, dayShort, shared, onClose, onRemove }: { e: Exercis
         <Mini label="Sets" value={sets} min={1} onChange={setSets} />
         <Mini label="Reps" value={reps} min={0} onChange={setReps} show={(n) => (n ? String(n) : 'fail')} />
       </div>
+      {settings?.setTracking && (
+        <div className="st-dedit-row">
+          <Mini label="Rest" value={rest} min={0} step={15} onChange={setRest}
+            show={(n) => (n ? fmtClock(n) : `Default ${fmtClock(settings.restSec ?? DEFAULT_REST)}`)} />
+        </div>
+      )}
       {shared.length > 0 && <p className="st-note">Also on {shared.join(', ')}, so it changes there too.</p>}
       <div className="st-dedit-actions">
         <button type="button" className="small danger" onClick={onRemove}>Remove from {dayShort}</button>

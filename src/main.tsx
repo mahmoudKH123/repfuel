@@ -31,6 +31,12 @@ mountIntro()
   addEventListener('touchend', () => root.classList.remove('scrolling'), { passive: true })
 }
 
+// It's an app, not a web page: no pinch zoom and no double-tap zoom anywhere.
+// iOS ignores user-scalable=no, so its pinch gesture events are cancelled here; the photo cropper uses
+// pointer events for its own pinch, which this doesn't touch.
+for (const g of ['gesturestart', 'gesturechange', 'gestureend']) addEventListener(g, (e) => e.preventDefault(), { passive: false })
+addEventListener('touchmove', (e) => { if (e.touches.length > 1 && !(e.target as Element).closest?.('.pc-stage')) e.preventDefault() }, { passive: false })
+
 // Offline support: the service worker caches the app so it opens with no connection.
 registerSW({ immediate: true })
 

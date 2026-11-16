@@ -53,3 +53,24 @@ export function applyWeights(e: Exercise, weight: number, nextWeight: number | u
   if (next && next.weight <= weight) next = { weight: weight + stepFor({ weight }), reps: 0 }
   return { ...e, weight, next, updatedAt: now }
 }
+
+export const DEFAULT_REST = 90
+
+/** Rest between sets: the lift's own time, else the default from Settings, else 90 s. */
+export function restFor(e: Pick<Exercise, 'restSec'>, defaultSec?: number): number {
+  return e.restSec ?? defaultSec ?? DEFAULT_REST
+}
+
+/**
+ * Tapping set dot `tapped` (0-based): a dot after the ones done ticks up to and including it;
+ * a dot that's already done un-ticks it and every set after it.
+ */
+export function tapSet(done: number, tapped: number, sets: number): number {
+  const t = Math.min(Math.max(0, tapped), sets - 1)
+  return t < done ? t : t + 1
+}
+
+/** Seconds left on a rest that ends at `endsAt` (ms), never below 0. */
+export const restLeft = (endsAt: number, now = Date.now()) => Math.max(0, Math.ceil((endsAt - now) / 1000))
+
+export const fmtClock = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
