@@ -11,7 +11,8 @@ import { useSettings, useWeek } from '../ui/hooks'
 import { fmtAmount } from '../ui/format'
 import { useSwipe } from '../ui/motion'
 import { Budget } from '../ui/Budget'
-import { Barbell } from '../ui/Barbell'
+import { FuelFigure } from '../ui/FuelFigure'
+import type { FigureKind } from '../ui/figure'
 import { Water } from '../ui/Water'
 import { DEFAULT_WATER_GOAL } from '../db/defaults'
 
@@ -32,6 +33,19 @@ const TIMES = [
   { key: 'afternoon', label: 'Afternoon', until: 17 },
   { key: 'evening', label: 'Evening', until: 24 },
 ] as const
+
+/** Which figure shows the day: matched on the workout's id and names, so renamed or added days still find theirs.
+ *  A rest day, or a workout it can't place, shows him standing. */
+function figureFor(training: boolean, workout?: { id: string; name: string; short: string }): FigureKind {
+  if (!training || !workout) return 'rest'
+  const t = `${workout.id} ${workout.name} ${workout.short}`.toLowerCase()
+  if (/c&b|chest\s*(&|and)\s*back|chestback/.test(t)) return 'cb'
+  if (/push|chest/.test(t)) return 'push'
+  if (/pull|back/.test(t)) return 'pull'
+  if (/leg/.test(t)) return 'legs'
+  if (/arm|bicep|shoulder/.test(t)) return 'arms'
+  return 'rest'
+}
 
 export function Today({ date, today, onDateChange, onAdd }: Props) {
   const settings = useSettings()
@@ -79,6 +93,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
   const doneId = session && session.done.length > 0 ? session.dayId : undefined
   const workout = planDays?.find((d) => d.id === (doneId ?? plan?.days[dayIndex(monday, date)]))
   const word = (training ? workout?.short || 'Train' : 'Rest').toUpperCase()
+  const figure = figureFor(training, workout)
   const toggleType = () => undoable(
     `${formatDay(date)}: ${training ? 'Training → Rest' : 'Rest → Training'}`,
     () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings)),
@@ -98,15 +113,18 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
       )}
 
       <div key={`b-${date}`} className={`dayview ${shown.dir}`} {...swipe}>
-        {/* Tap to switch Training / Rest. Training = solid word, Rest = outlined; letters drop in when it changes. */}
-        <button key={word} className={`td-tag${training ? '' : ' rest'}`} onClick={toggleType} aria-label={`${training ? `Training day${workout ? `, ${workout.name}` : ''}` : 'Rest day'}. Tap to switch to ${training ? 'rest' : 'training'}`}>
-          <small aria-hidden="true">{training ? (session?.finishedAt ? 'Done' : 'Training') : 'Rest day'}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7" /></svg>
-          </small>
-          <b aria-hidden="true">{[...word].map((ch, i) => <span key={i} style={{ '--i': i } as CSSProperties}>{ch}</span>)}</b>
-        </button>
-        <Barbell entries={entries} target={day.target.kcal} />
-        <Budget compact eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
+        {/* The hero: the workout word and the calories on the left, the day's figure on the right, macros under both. */}
+        <div className="td-hero">
+          {/* Tap to switch Training / Rest. Training = solid word, Rest = outlined; letters drop in when it changes. */}
+          <button key={word} className={`td-tag${training ? '' : ' rest'}`} onClick={toggleType} aria-label={`${training ? `Training day${workout ? `, ${workout.name}` : ''}` : 'Rest day'}. Tap to switch to ${training ? 'rest' : 'training'}`}>
+            <small aria-hidden="true">{training ? (session?.finishedAt ? 'Done' : 'Training') : 'Rest day'}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M7 4L3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7" /></svg>
+            </small>
+            <b aria-hidden="true">{[...word].map((ch, i) => <span key={i} style={{ '--i': i } as CSSProperties}>{ch}</span>)}</b>
+          </button>
+          <FuelFigure kind={figure} />
+          <Budget compact eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
+        </div>
         <Water date={date} ml={water?.ml ?? 0} sips={water?.sips.length ?? 0} goal={settings.waterGoalMl ?? DEFAULT_WATER_GOAL} />
       </div>
       {/* The day picker stays put while the day changes, so its date bubble can glide to the new day. */}

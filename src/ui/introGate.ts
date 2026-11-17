@@ -2,10 +2,10 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Intro } from './Intro'
 
-/* Launch intro gate. While the intro plays, the page underneath is already rendered (so the logo knows where to morph)
-   but its entrance motion is held: CSS animations pause via html[data-intro='build'] until the morph starts ('fly'),
-   and number count-ups / bar fills / the bar's bend (ui/motion.ts, Barbell) wait in this queue until the bar lands,
-   so the page settles in around it. */
+/* Launch intro gate. While the intro plays, the page underneath is already rendered (so the logo knows where to fly)
+   but its entrance motion is held: CSS animations pause via html[data-intro='build'] until the flight starts ('fly'),
+   and number count-ups, bar fills, the calorie flow and Today's figure (ui/motion.ts, Budget, FuelFigure) wait in this
+   queue until the logo lands in the greeting's mark, so the page settles in around it. */
 let queue: (() => void)[] | null = null
 
 /** Runs `f` now, or when the intro releases the page. Returns a cancel function. */
@@ -39,13 +39,11 @@ export function mountIntro() {
     root.unmount()
     host.remove()
   }
-  // Landing: the page's own barbell appears under the morphed pieces (hidden while html[data-intro] is set), already
-  // built: html[data-landed] turns off its own entrance animations for the rest of the session.
+  // The flight: CSS animations on the page are let go.
   const fly = () => { document.documentElement.dataset.intro = 'fly' }
-  // Landing: counters, fills and the bend start; the page's own intro styles come off a frame later (the morph's settle
+  // Landing: counters, fills and the figure start; the page's own intro styles come off a frame later (the settle
   // animations already hold the same look), so no single frame carries all of it.
   const land = () => {
-    document.documentElement.dataset.landed = ''
     if (queue) flush()
     requestAnimationFrame(() => { delete document.documentElement.dataset.intro })
   }
