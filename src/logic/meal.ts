@@ -20,7 +20,13 @@ export interface AiMealItem extends Macros {
   note: string
   /** Site the numbers came from (web search), or empty when the AI estimated. */
   source?: string
+  /** The exact page the numbers came from (only real search results are kept). */
+  sourceUrl?: string
+  /** What kind of source it was, for the source line under the result. */
+  sourceType?: SourceType
 }
+
+export type SourceType = 'restaurant' | 'brand' | 'database' | 'label' | 'user' | 'estimate' | 'other'
 
 export interface AiMeal {
   name: string
@@ -48,6 +54,8 @@ export interface MealItem {
   note: string
   /** Site the AI took the numbers from, when it found the item online. */
   source?: string
+  sourceUrl?: string
+  sourceType?: SourceType
 }
 
 /** Serving weight for saved foods: from the label ("1 scoop, 36g"), or the base amount for gram/ml foods. */
@@ -103,7 +111,7 @@ export function buildItems(meal: AiMeal, foods: Food[]): MealItem[] {
     const base = { kcal: i.kcal, protein: i.protein, carbs: i.carbs, fat: i.fat }
     const source = i.source?.trim() || undefined
     // Found online = real numbers, not an estimate.
-    const common = { key: `${n}-ai`, name: i.name, base, servingLabel: i.servingLabel || '1 serving', liquid: i.liquid, on: true, save: false, estimate: !source, confidence: i.confidence, note: i.note, source }
+    const common = { key: `${n}-ai`, name: i.name, base, servingLabel: i.servingLabel || '1 serving', liquid: i.liquid, on: true, save: false, estimate: !source, confidence: i.confidence, note: i.note, source, sourceUrl: i.sourceUrl || undefined, sourceType: i.sourceType || undefined }
     // No weight: the numbers are taken as one serving.
     if (!(i.eatenGrams > 0)) return { ...common, baseAmount: 1, baseUnit: 'serving' as Unit, unit: 'serving' as AmountUnit, amount: 1 }
     const w: 'g' | 'ml' = i.liquid ? 'ml' : 'g'

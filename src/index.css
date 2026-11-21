@@ -1794,3 +1794,27 @@ body:has(.ud-pill) .tr-toast { bottom: calc(env(safe-area-inset-bottom) + 146px)
   .ud-left { animation: none; }
   .ud-icon { transition: none; }
 }
+
+/* Typed search: what you typed, then the same live steps as the photo screen. */
+.add-query { max-width: min(320px, 86%); margin: 0 !important; padding: 12px 16px; border-radius: 16px; background: var(--card); box-shadow: var(--shadow);
+  font-size: 16px; font-weight: 600 !important; color: var(--text) !important; text-align: center; overflow-wrap: anywhere; }
+
+/* Fix box: what the AI is doing right now, one line. */
+.add-fix-live { display: flex; align-items: center; gap: 9px; margin: 10px 2px 0; font-size: 13px; font-weight: 600; color: var(--text2); }
+.add-fix-live .add-step-dot { width: 14px; height: 14px; border-width: 2px; border-color: var(--brand); border-right-color: transparent; animation: spin 0.8s linear infinite; }
+
+/* Source line: where the numbers came from. Type icon + label + site (links to the page), what was used underneath. */
+.src { display: flex; flex-direction: column; gap: 2px; margin: 8px 8px 0; min-width: 0; }
+.src-head { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: 13px; font-weight: 600; color: var(--text); text-decoration: none; }
+a.src-head { color: var(--brand); }
+.src-head svg { flex: none; }
+.src-kind { flex: none; }
+.src-site { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--text2); }
+.src-go { opacity: 0.7; }
+.src-note { font-size: 12px; line-height: 16px; color: var(--text2); padding-left: 20px; }
+.src.est .src-head { color: var(--text2); }
+.src:not(.compact) { align-items: center; text-align: center; }
+.src:not(.compact) .src-note { padding-left: 0; }
+.src.compact { margin: 0; gap: 1px; }
+.src.compact .src-head { font-size: 12px; }
+.src.compact .src-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

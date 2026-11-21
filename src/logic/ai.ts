@@ -115,39 +115,47 @@ export async function askMeal(text: string, foods: string): Promise<AiMeal> {
   return meal
 }
 
-/**
- * Like askMeal, but the Worker first searches the web for the items (real numbers when found, high-end estimate when not).
- * With `fix`, the AI corrects the current result (`current` = what the screen shows now) instead of starting over.
- */
-export async function askSearch(text: string, foods: string, fix?: { text: string; current: string; photo?: { image: string; mimeType: string } }): Promise<AiMeal> {
-  if (isMock()) return mockMeal(text, fix?.text)
-  const data = await post({ mode: 'search', text, foods, ...(fix ? { fix: fix.text, current: fix.current, ...fix.photo } : {}) })
-  const meal = data.meal as AiMeal | undefined
-  if (!meal?.items?.length) throw new Error('AI found no food in that. Try describing it differently.')
-  return meal
-}
+/** The search conversation (pages read + the AI's last answer). Sent back with a fix so the AI continues instead of starting over. */
+export interface SearchCtx { web: string; answer: string; fixes: string[]; sites: string[]; urls: string[] }
 
-export type PhotoKind = 'label' | 'food' | 'none'
-
-/** Live steps while the AI looks at a photo (streamed from the Worker). */
-export type PhotoEvent =
+/** Live steps of a typed search (streamed from the Worker). */
+export type SearchEvent =
   | { t: 'start' }
-  | { t: 'kind'; kind: PhotoKind }
-  | { t: 'seen'; text: string }
+  /** What it will search for; empty = no web search needed (e.g. a fix that only changes amounts). */
+  | { t: 'plan'; queries: string[] }
+  | { t: 'read'; count: number; sites: string[] }
+  /** The AI is reading the results and working out the numbers. */
+  | { t: 'think' }
   | { t: 'item'; i: number; name: string; kcal?: number }
   | { t: 'retry' }
-  /** A label's numbers didn't add up (or were hard to read): the AI is reading it again. */
-  | { t: 'check' }
 
-export type PhotoResult = { kind: 'label'; food: AiFood } | { kind: 'food'; meal: AiMeal } | { kind: 'none'; note: string }
+/**
+ * Like askMeal, but the Worker first searches the web for the items (real numbers when found, high-end estimate when not),
+ * reporting each step as it goes. With `fix`, the AI corrects the current result (`current` = what the screen shows now)
+ * in the same conversation (`ctx`), so it keeps the pages it read and only searches for what's new.
+ */
+export async function askSearch(
+  text: string,
+  foods: string,
+  onEvent: (e: SearchEvent) => void,
+  fix?: { text: string; current: string; photo?: { image: string; mimeType: string }; ctx?: SearchCtx },
+): Promise<{ meal: AiMeal; ctx?: SearchCtx }> {
+  if (isMock()) return mockSearch(text, onEvent, fix?.text)
+  const done = await streamPost(
+    { mode: 'search', stream: true, text, foods, ...(fix ? { fix: fix.text, current: fix.current, ctx: fix.ctx, ...fix.photo } : {}) },
+    (e) => { if (e.t !== 'kind' && e.t !== 'seen') onEvent(e as SearchEvent) },
+  )
+  const meal = done.meal as AiMeal | undefined
+  if (!meal?.items?.length) throw new Error('AI found no food in that. Try describing it differently.')
+  return { meal, ctx: done.ctx as SearchCtx | undefined }
+}
 
-/** Any photo: the AI decides if it is a nutrition label, food, or neither, and reports each step as it goes. */
-export async function askPhoto(img: { image: string; mimeType: string }, foods: string, onEvent: (e: PhotoEvent) => void): Promise<PhotoResult> {
-  if (isMock()) return mockPhoto(onEvent)
+/** POSTs a streamed request and passes each progress event on. Resolves with the final `done` event; an `error` event throws. */
+async function streamPost(req: Record<string, unknown>, onEvent: (e: Record<string, unknown>) => void): Promise<Record<string, unknown>> {
   if (!AI_URLS.length) throw new Error('AI is not set up yet.')
   const pass = getPass()
   if (!pass) throw new Error('Enter your AI passcode in Settings → AI first.')
-  const res = await send(JSON.stringify({ mode: 'photo', ...img, foods }), pass)
+  const res = await send(JSON.stringify(req), pass)
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}))
     throw new Error(data.error ?? `AI error (${res.status}).`)
@@ -168,12 +176,8 @@ export async function askPhoto(img: { image: string; mimeType: string }, foods: 
         let e: Record<string, unknown>
         try { e = JSON.parse(line.slice(5)) } catch { continue }
         if (e.t === 'error') throw new Error(String(e.error ?? 'AI error.'))
-        if (e.t === 'done') {
-          if (e.kind === 'label' && e.food) return { kind: 'label', food: e.food as AiFood }
-          if (e.kind === 'food' && (e.meal as AiMeal | undefined)?.items?.length) return { kind: 'food', meal: e.meal as AiMeal }
-          return { kind: 'none', note: String(e.note ?? 'No food or nutrition label found in this photo.') }
-        }
-        onEvent(e as PhotoEvent)
+        if (e.t === 'done') return e
+        onEvent(e)
       }
     }
   } catch (e) {
@@ -182,6 +186,29 @@ export async function askPhoto(img: { image: string; mimeType: string }, foods: 
     throw new Error('Lost the connection to the AI. Try again.')
   }
   throw new Error('Lost the connection to the AI. Try again.')
+}
+
+export type PhotoKind = 'label' | 'food' | 'none'
+
+/** Live steps while the AI looks at a photo (streamed from the Worker). */
+export type PhotoEvent =
+  | { t: 'start' }
+  | { t: 'kind'; kind: PhotoKind }
+  | { t: 'seen'; text: string }
+  | { t: 'item'; i: number; name: string; kcal?: number }
+  | { t: 'retry' }
+  /** A label's numbers didn't add up (or were hard to read): the AI is reading it again. */
+  | { t: 'check' }
+
+export type PhotoResult = { kind: 'label'; food: AiFood } | { kind: 'food'; meal: AiMeal } | { kind: 'none'; note: string }
+
+/** Any photo: the AI decides if it is a nutrition label, food, or neither, and reports each step as it goes. */
+export async function askPhoto(img: { image: string; mimeType: string }, foods: string, onEvent: (e: PhotoEvent) => void): Promise<PhotoResult> {
+  if (isMock()) return mockPhoto(onEvent)
+  const e = await streamPost({ mode: 'photo', ...img, foods }, (ev) => onEvent(ev as PhotoEvent))
+  if (e.kind === 'label' && e.food) return { kind: 'label', food: e.food as AiFood }
+  if (e.kind === 'food' && (e.meal as AiMeal | undefined)?.items?.length) return { kind: 'food', meal: e.meal as AiMeal }
+  return { kind: 'none', note: String(e.note ?? 'No food or nutrition label found in this photo.') }
 }
 
 /** Shrinks a photo to max 1280px JPEG and returns base64 (no data: prefix). Keeps uploads small and fast. */
@@ -211,6 +238,20 @@ async function mockMeal(text: string, fix?: string): Promise<AiMeal> {
       { ...base, name: 'Tea with milk and sugar', eatenGrams: 250, servingLabel: '1 glass', gramsPerServing: 250, liquid: true, kcal: 70, protein: 2, carbs: 12, fat: 2, note: '2 tsp sugar.' },
     ],
   }
+}
+
+/** Dev sample of the live search steps, then the sample meal (with a source line on the first item). */
+async function mockSearch(text: string, on: (e: SearchEvent) => void, fix?: string): Promise<{ meal: AiMeal; ctx?: SearchCtx }> {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  on({ t: 'start' }); await wait(500)
+  on({ t: 'plan', queries: fix ? [] : ['abou tarek koshary medium calories', 'abou tarek menu calories'] }); await wait(900)
+  if (!fix) { on({ t: 'read', count: 8, sites: ['elmenus.com', 'fatsecret.com', 'talabat.com'] }); await wait(500) }
+  on({ t: 'think' }); await wait(700)
+  const meal = await mockMeal(text, fix)
+  meal.items.forEach((it, i) => on({ t: 'item', i, name: it.name, kcal: it.kcal }))
+  meal.items = meal.items.map((it, i) => (i === 0 ? { ...it, source: 'elmenus.com', sourceType: 'restaurant', sourceUrl: 'https://elmenus.com/' } : { ...it, sourceType: 'estimate' }))
+  await wait(400)
+  return { meal, ctx: { web: '', answer: JSON.stringify(meal), fixes: fix ? [fix] : [], sites: ['elmenus.com'], urls: ['https://elmenus.com/'] } }
 }
 
 async function mockPhoto(on: (e: PhotoEvent) => void): Promise<PhotoResult> {

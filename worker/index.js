@@ -180,7 +180,7 @@ const RULES_PLAN = `A gym-goer in Egypt wants to log what they ate. Write web se
 - Egyptian dishes without a brand: the dish name plus "calories per 100g", e.g. "molokhia with chicken calories per 100g".
 - Generic foods: aim at nutrition databases, e.g. "boiled egg USDA calories protein per egg", "cooked white rice calories per 100g USDA".
 - Packaged products (drinks, bars, yogurt, protein shakes): one query with brand + product + "nutrition facts" + "Egypt", and one with brand + product + "openfoodfacts" (label data).
-- If a correction is given: search for items it adds or renames. If it only changes amounts, no queries.
+- If a correction is given: search ONLY for items it adds or renames (or a new size of a restaurant/branded item whose numbers are not already known). If it only changes how many or how much of items already in the current result (e.g. "it was 3 eggs", "half a plate", "300 g not 200 g", "no oil"), return an empty list: the numbers are already known and just need scaling.
 - If the correction says the numbers are WRONG (without giving numbers), search again with DIFFERENT words than before: add "Egypt", the bottle or pack size, "nutrition facts label", "per 100ml", or "openfoodfacts".`
 
 const PLAN_SCHEMA = {
@@ -198,6 +198,8 @@ For each item:
 - Choosing between sources, always in this order, so the same meal gives the same answer every time: 1) exact product/restaurant AND size match, 2) best source type in the order above, 3) if two equally good sources still disagree, the HIGHER values (safer for calorie counting).
 - Named brand or restaurant but no source for THAT brand (only generic numbers): use the generic numbers only as a base, take the HIGH end, and add what that place typically adds (bigger restaurant portions, garlic sauce / toum, tahini, oil, butter, fries inside). Confidence "medium", and note says "No <brand> data, high end of generic".
 - source: the short site name you used (e.g. "fdc.nal.usda.gov", "elmenus.com"), or "" if no result matched this item.
+- sourceUrl: the exact page URL (from the web results) you took the numbers from, or "".
+- sourceType: what kind of source it is: "restaurant" (a restaurant or menu site such as elmenus or talabat), "brand" (the brand's own site or product page), "database" (USDA, FatSecret, Nutritionix, MyFitnessPal, CalorieKing, Open Food Facts...), "label" (a label photo), "user" (numbers the user gave), "estimate" (no matching source), or "other".
 - note: one short line saying what you used, e.g. "USDA large boiled egg 78 kcal x 2" or "elmenus: medium box 650 kcal".
 - No matching result: estimate at the HIGH end of a realistic range for that portion (safe for calorie counting, still believable), always count the cooking oil, butter, ghee or sauce it is normally made with, confidence at most "medium", and start note with "High-end estimate".
 - Assume normal Egyptian portions unless the user gives an amount.
@@ -215,6 +217,8 @@ Corrections:
 - If a PHOTO is attached to the correction: a nutrition label = copy its numbers EXACTLY (prefer per 100 g/ml, convert kJ to kcal, scale to the amount eaten, use the pack size printed on it when the user didn't say), source "label photo", confidence "high". A photo of the food = use it to judge what and how much was eaten.
 - If the correction says the result is wrong without numbers, do NOT repeat the same numbers: use a different matching source or the other product version from the web results, and say in note which one you switched to.`
 
+const SOURCE_TYPES = ['restaurant', 'brand', 'database', 'label', 'user', 'estimate', 'other']
+
 const SEARCH_SCHEMA = {
   ...MEAL_SCHEMA,
   properties: {
@@ -223,15 +227,23 @@ const SEARCH_SCHEMA = {
       ...MEAL_SCHEMA.properties.items,
       items: {
         ...MEAL_SCHEMA.properties.items.items,
-        properties: { ...MEAL_SCHEMA.properties.items.items.properties, source: { type: 'STRING' } },
-        required: [...MEAL_SCHEMA.properties.items.items.required, 'source'],
+        properties: {
+          ...MEAL_SCHEMA.properties.items.items.properties,
+          source: { type: 'STRING' },
+          sourceUrl: { type: 'STRING' },
+          sourceType: { type: 'STRING', enum: SOURCE_TYPES },
+        },
+        required: [...MEAL_SCHEMA.properties.items.items.required, 'source', 'sourceUrl', 'sourceType'],
       },
     },
   },
 }
 
-const MAX_WEB_TEXT = 14_000 // web snippets sent to the model
+const MAX_WEB_TEXT = 16_000 // web snippets (with their page links) sent to the model
+const MAX_CTX_WEB = 24_000 // all pages read in one search conversation (first search + fixes)
 const SEARCH_TIMEOUT_MS = 8_000
+// Social media, video and Q&A sites: anyone can post numbers there, so they are never used as a source.
+const UNTRUSTED_SITES = ['facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com', 'pinterest.com', 'reddit.com', 'quora.com', 'x.com', 'twitter.com', 'threads.net', 'linkedin.com']
 
 const MAX_FOODS_TEXT = 15_000 // saved-food list sent with meal requests
 
@@ -243,11 +255,11 @@ const THINKING = { thinkingConfig: { thinkingLevel: 'low' } }
 const CLAUDE_MODEL = 'claude-sonnet-5-5'
 const CLAUDE_TIMEOUT_MS = 45_000
 const CREDITS_MSG = 'AI credits used up for now. Top up or raise the limit in the Anthropic Console, or add it by hand.'
-const useClaude = (env) => env.PROVIDER === 'claude'
-const modelList = (env) => (useClaude(env) ? [env.CLAUDE_MODEL || CLAUDE_MODEL] : env.MODELS.split(',').map((m) => m.trim()))
-const keyFor = (env) => (useClaude(env) ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY)
-const timeoutFor = (env) => (useClaude(env) ? CLAUDE_TIMEOUT_MS : MODEL_TIMEOUT_MS)
-const limitMsg = (env, status) => (useClaude(env)
+const isClaude = (env) => env.PROVIDER === 'claude'
+const modelList = (env) => (isClaude(env) ? [env.CLAUDE_MODEL || CLAUDE_MODEL] : env.MODELS.split(',').map((m) => m.trim()))
+const keyFor = (env) => (isClaude(env) ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY)
+const timeoutFor = (env) => (isClaude(env) ? CLAUDE_TIMEOUT_MS : MODEL_TIMEOUT_MS)
+const limitMsg = (env, status) => (isClaude(env)
   ? (status === 429 ? 'AI is busy right now. Try again in a minute.' : 'AI is unavailable right now. Try again later.')
   : (status === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.'))
 // Same seed every call: the same words give the same queries and the same answer (15/11: one shake gave 292, then 330).
@@ -325,7 +337,7 @@ export default {
     }
 
     let payload
-    let sites = null // search mode: real result sites, used to check the AI's `source`
+    let search = null // search mode: the prepared request plus the sites and pages the AI may name as its source
     if (body.mode === 'text' && typeof body.text === 'string' && body.text.trim()) {
       payload = {
         contents: [{ parts: [{ text: `${RULES_TEXT}\n\nFood: ${body.text.trim().slice(0, 500)}` }] }],
@@ -338,26 +350,10 @@ export default {
         generationConfig: { responseMimeType: 'application/json', responseSchema: MEAL_SCHEMA, ...THINKING },
       }
     } else if (body.mode === 'search' && typeof body.text === 'string' && body.text.trim()) {
-      // Saved foods are NOT used here: tapping Estimate means "look it up", the saved list is already shown above it.
-      const text = body.text.trim().slice(0, 800)
-      const fix = typeof body.fix === 'string' ? body.fix.trim().slice(0, 500) : ''
-      const current = fix && typeof body.current === 'string' ? body.current.slice(0, 3_000) : ''
-      // A photo only comes with a correction ("here's the label").
-      const image = fix && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64 ? body.image : ''
-      const ask = `Meal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}${image ? ' (photo attached)' : ''}` : ''}`
-      // A photo with no other words is a label or the food itself: it has the answer, so skip the web search.
-      const web = image && /^\(photo\)$/.test(fix) ? { text: '', sites: new Set() } : await webLookup(ask, env)
-      // Sites the AI may name as a source: this search's results, plus sources already on screen (a fix keeps those).
-      for (const m of current.matchAll(/from ([a-z0-9.-]+\.[a-z]{2,})/gi)) web.sites.add(m[1].toLowerCase())
-      sites = web.sites
-      payload = {
-        contents: [{ parts: [
-          { text: `${RULES_SEARCH}\n\n${ask}\n\nWeb results:\n${web.text || '(none found)'}` },
-          ...(image ? [{ inline_data: { mime_type: body.mimeType || 'image/jpeg', data: image } }] : []),
-        ] }],
-        // Deeper reasoning here: reading sources and converting portions is where accuracy is won or lost.
-        generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, thinkingConfig: { thinkingLevel: 'high' }, ...SEED },
-      }
+      // Live steps for apps that ask for them; older app versions get the plain JSON reply below.
+      if (body.stream === true) return searchStream(body, env, { ...cors, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+      search = await searchPrep(body, env)
+      payload = search.payload
     } else if (body.mode === 'label' && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64) {
       payload = {
         contents: [{ parts: [{ text: RULES_LABEL }, { inline_data: { mime_type: body.mimeType || 'image/jpeg', data: body.image } }] }],
@@ -391,15 +387,152 @@ export default {
       if (!raw) return reply(502, { error: 'AI gave an unreadable answer. Try again.' })
       if (body.mode === 'meal' || body.mode === 'search') {
         const meal = fromMeal(raw)
-        // A source the search never returned is made up (seen: "egmenus.com"): drop it, so the item counts as an estimate.
-        if (sites) for (const i of meal.items) if (i.source && i.source !== 'your numbers' && i.source !== 'label photo' && !knownSite(i.source, sites)) i.source = ''
+        if (search) checkSources(meal, search)
         if (!meal.items.length) return reply(502, { error: 'AI found no food in that. Try describing it differently.' })
-        return reply(200, { meal, model })
+        return reply(200, { meal, model, ...(search ? { ctx: search.next(text) } : {}) })
       }
       return reply(200, { food: body.mode === 'label' ? fromLabel(await recheckLabel(raw, body.image, body.mimeType, env, deadline)) : fromText(raw), model })
     }
     return reply(503, { error: limitMsg(env, lastStatus) })
   },
+}
+
+/** The search conversation the app keeps and sends back with a fix, so the AI continues where it left off. */
+function cleanCtx(c) {
+  if (!c || typeof c !== 'object' || typeof c.answer !== 'string') return null
+  const list = (v, n) => (Array.isArray(v) ? v.map((x) => String(x).slice(0, 400)).slice(0, n) : [])
+  return {
+    web: String(c.web ?? '').slice(0, MAX_CTX_WEB),
+    answer: c.answer.slice(0, 8_000),
+    fixes: list(c.fixes, 5).map((f) => f.slice(0, 300)),
+    sites: list(c.sites, 80),
+    urls: list(c.urls, 80),
+  }
+}
+
+/**
+ * Builds a search request. A first search: rules + meal + web results. A fix that brings the conversation (`ctx`):
+ * the first turn with the pages already read, the AI's last answer, then the correction with only the NEW web results,
+ * so the AI keeps its sources and reasoning instead of starting over. `on` gets the live steps (plan, read).
+ */
+async function searchPrep(body, env, on) {
+  // Saved foods are NOT used here: tapping Estimate means "look it up", the saved list is already shown above it.
+  const text = body.text.trim().slice(0, 800)
+  const fix = typeof body.fix === 'string' ? body.fix.trim().slice(0, 500) : ''
+  const current = fix && typeof body.current === 'string' ? body.current.slice(0, 3_000) : ''
+  // A photo only comes with a correction ("here's the label").
+  const image = fix && typeof body.image === 'string' && body.image.length < MAX_IMAGE_B64 ? body.image : ''
+  const prev = fix ? cleanCtx(body.ctx) : null
+  const photoPart = image ? [{ inline_data: { mime_type: body.mimeType || 'image/jpeg', data: image } }] : []
+  const ask = `Meal: ${text}${fix ? `\n\nCurrent result:\n${current || '(see meal)'}\n\nCorrection: ${fix}${image ? ' (photo attached)' : ''}` : ''}`
+  // A photo with no other words is a label or the food itself: it has the answer, so skip the web search.
+  let web
+  if (image && /^\(photo\)$/.test(fix)) {
+    web = { text: '', sites: new Set(), urls: new Set() }
+    if (on) await on({ t: 'plan', queries: [] })
+  } else {
+    web = await webLookup(ask, env, on)
+  }
+  // Sites the AI may name as a source: this search's results, the pages read before, and sources already on screen.
+  const sites = new Set([...web.sites, ...(prev?.sites ?? [])])
+  for (const m of current.matchAll(/from ([a-z0-9.-]+\.[a-z]{2,})/gi)) sites.add(m[1].toLowerCase())
+  const urls = new Set([...web.urls, ...(prev?.urls ?? [])])
+  const contents = prev
+    ? [
+      { role: 'user', parts: [{ text: `${RULES_SEARCH}\n\nMeal: ${text}\n\nWeb results:\n${prev.web || '(none found)'}` }] },
+      { role: 'model', parts: [{ text: prev.answer }] },
+      { role: 'user', parts: [
+        { text: `${prev.fixes.length ? `Earlier corrections (already in your last answer): ${prev.fixes.join(' | ')}\n\n` : ''}The result as it is on the user's screen now (they may have changed amounts by hand since your last answer):\n${current || '(same as your last answer)'}\n\nCorrection: ${fix}${image ? ' (photo attached)' : ''}\n\nNew web results for this correction:\n${web.text || '(no new search needed: use the results above)'}\n\nApply the correction and give the full updated meal in the same JSON shape.` },
+        ...photoPart,
+      ] },
+    ]
+    : [{ role: 'user', parts: [{ text: `${RULES_SEARCH}\n\n${ask}\n\nWeb results:\n${web.text || '(none found)'}` }, ...photoPart] }]
+  return {
+    sites,
+    urls,
+    payload: {
+      contents,
+      // Deeper reasoning here: reading sources and converting portions is where accuracy is won or lost.
+      generationConfig: { responseMimeType: 'application/json', responseSchema: SEARCH_SCHEMA, thinkingConfig: { thinkingLevel: 'high' }, ...SEED },
+    },
+    /** The conversation to send back with the next fix: every page read so far and this answer. */
+    next: (answer) => ({
+      web: (prev ? `${prev.web}${web.text ? `\n${web.text}` : ''}` : web.text).slice(0, MAX_CTX_WEB),
+      answer: answer.slice(0, 8_000),
+      fixes: prev ? [...prev.fixes, fix].slice(-5) : fix ? [fix] : [],
+      sites: [...sites].slice(0, 80),
+      urls: [...urls].slice(0, 80),
+    }),
+  }
+}
+
+/**
+ * A source the search never returned is made up (seen: "egmenus.com"): drop it, so the item counts as an estimate.
+ * A page link is kept only if it was one of the real results. Every item ends with a sourceType the app can show.
+ */
+function checkSources(meal, { sites, urls }) {
+  for (const i of meal.items) {
+    if (i.source === 'your numbers') i.sourceType = 'user'
+    else if (i.source === 'label photo') i.sourceType = 'label'
+    else if (i.source && !knownSite(i.source, sites)) i.source = ''
+    if (!i.source) { i.sourceType = 'estimate'; i.sourceUrl = '' }
+    if (i.sourceUrl && !urls.has(i.sourceUrl)) i.sourceUrl = ''
+    if (!i.sourceType || (i.source && i.sourceType === 'estimate')) i.sourceType = 'other'
+  }
+}
+
+/**
+ * Search with live steps, as SSE lines `data: {...}` (same transport as the photo stream):
+ *   start                   the request reached the server
+ *   plan  {queries}         what it will search for ([] = no web search needed)
+ *   read  {count, sites}    how many results came back, and the top sites
+ *   think                   the AI is reading them and working out the numbers
+ *   item  {i, name, kcal?}  each item as it is written
+ *   retry                   first model failed part way, the next starts over
+ *   done  {meal, ctx}       the answer, plus the conversation to send back with a fix
+ *   error {error}
+ */
+function searchStream(body, env, headers) {
+  const { readable, writable } = new TransformStream()
+  const out = writable.getWriter()
+  const enc = new TextEncoder()
+  const send = (e) => out.write(enc.encode(`data: ${JSON.stringify(e)}\n\n`))
+  ;(async () => {
+    let lastStatus = 0
+    const deadline = Date.now() + TOTAL_BUDGET_MS
+    try {
+      await send({ t: 'start' })
+      const search = await searchPrep(body, env, send)
+      await send({ t: 'think' })
+      let tried = false
+      // Gemini: fast model first (see the main handler). Claude: one model.
+      for (const model of modelList(env).reverse()) {
+        const left = deadline - Date.now()
+        if (left < 4_000) break
+        if (tried) await send({ t: 'retry' })
+        tried = true
+        const t0 = Date.now()
+        const r = await streamModel(model, search.payload, keyFor(env), Math.min(timeoutFor(env), left), deadline, send)
+        console.log(JSON.stringify({ mode: 'search-stream', model, status: r.status, ms: Date.now() - t0, error: r.error }))
+        lastStatus = r.status
+        if (r.status === 402) return await send({ t: 'error', error: CREDITS_MSG })
+        if (r.status === 429 || r.status === 404 || r.status >= 500) continue
+        if (r.status !== 200) return await send({ t: 'error', error: `AI error (${r.status}).` })
+        const raw = parseJson(r.text)
+        if (!raw) return await send({ t: 'error', error: 'AI gave an unreadable answer. Try again.' })
+        const meal = fromMeal(raw)
+        checkSources(meal, search)
+        if (!meal.items.length) return await send({ t: 'error', error: 'AI found no food in that. Try describing it differently.' })
+        return await send({ t: 'done', meal, model, ctx: search.next(r.text) })
+      }
+      await send({ t: 'error', error: limitMsg(env, lastStatus) })
+    } catch {
+      await send({ t: 'error', error: 'AI is unavailable right now. Try again later.' }).catch(() => {})
+    } finally {
+      await out.close().catch(() => {})
+    }
+  })()
+  return new Response(readable, { status: 200, headers })
 }
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.round(Number(v) * 10) / 10 : 0)
@@ -434,6 +567,8 @@ function fromMeal(r) {
     confidence: conf(i.confidence),
     note: String(i.note ?? '').slice(0, 200),
     source: String(i.source ?? '').slice(0, 60),
+    sourceUrl: /^https?:\/\//.test(String(i.sourceUrl ?? '')) ? String(i.sourceUrl).slice(0, 400) : '',
+    sourceType: SOURCE_TYPES.includes(i.sourceType) ? i.sourceType : '',
   }))
   return { name: String(r.mealName ?? 'Meal').slice(0, 80), items }
 }
@@ -460,9 +595,10 @@ function fromLabel(r) {
  * Web lookup for search mode: a fast model writes up to 3 queries, Tavily runs them in parallel,
  * and the snippets come back as one text block. Any failure just means "no web results" (the estimate still works).
  */
-async function webLookup(ask, env) {
+async function webLookup(ask, env, on = async () => {}) {
   const sites = new Set()
-  if (!env.TAVILY_API_KEY) return { text: '', sites }
+  const urls = new Set()
+  if (!env.TAVILY_API_KEY) { await on({ t: 'plan', queries: [] }); return { text: '', sites, urls } }
   const t0 = Date.now()
   // Fastest model first: planning is simple and every second counts here.
   let queries = []
@@ -470,12 +606,13 @@ async function webLookup(ask, env) {
     const r = await callModel(model, {
       contents: [{ parts: [{ text: `${RULES_PLAN}\n\n${ask}` }] }],
       generationConfig: { responseMimeType: 'application/json', responseSchema: PLAN_SCHEMA, ...THINKING, ...SEED },
-    }, keyFor(env), useClaude(env) ? 15_000 : 10_000)
+    }, keyFor(env), isClaude(env) ? 15_000 : 10_000)
     if (r.status !== 200) continue
     const raw = parseJson((r.data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''))
     queries = (Array.isArray(raw?.queries) ? raw.queries : []).map((q) => String(q).trim().slice(0, 200)).filter(Boolean).slice(0, 3)
     break
   }
+  await on({ t: 'plan', queries })
   const found = await Promise.all(queries.map((q) => tavily(q, env.TAVILY_API_KEY)))
   // Queries count and timing only (never the food text), visible with `wrangler tail`.
   console.log(JSON.stringify({ mode: 'search', queries: queries.length, results: found.map((f) => f.length), ms: Date.now() - t0 }))
@@ -484,11 +621,14 @@ async function webLookup(ask, env) {
     if (!results.length) return
     out += `Search "${queries[n]}":\n`
     for (const x of results) {
-      out += `- [${x.site}] ${x.title}: ${x.content}\n`
+      out += `- [${x.site}] ${x.title} (${x.url}): ${x.content}\n`
       if (x.site) sites.add(x.site.toLowerCase())
+      if (x.url) urls.add(x.url)
     }
   })
-  return { text: out.slice(0, MAX_WEB_TEXT), sites }
+  const all = found.flat()
+  if (queries.length) await on({ t: 'read', count: all.length, sites: [...new Set(all.map((x) => x.site).filter(Boolean))].slice(0, 3) })
+  return { text: out.slice(0, MAX_WEB_TEXT), sites, urls }
 }
 
 /** True when `source` is one of the sites (or a subdomain / parent of one), ignoring "www." and case. */
@@ -518,7 +658,7 @@ async function tavily(query, key) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       // Basic depth = 1 credit. Raw page text is where the actual numbers usually are (snippets often cut them off).
-      body: JSON.stringify({ query, search_depth: 'basic', max_results: 4, include_answer: false, include_raw_content: 'text' }),
+      body: JSON.stringify({ query, search_depth: 'basic', max_results: 4, include_answer: false, include_raw_content: 'text', exclude_domains: UNTRUSTED_SITES }),
       signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
     })
     if (!res.ok) return []
@@ -527,8 +667,9 @@ async function tavily(query, key) {
       let site = ''
       try { site = new URL(x.url).hostname.replace(/^www\./, '') } catch { /* keep blank */ }
       const snippet = String(x.content ?? '').replace(/\s+/g, ' ').slice(0, 500)
-      return { site, title: String(x.title ?? '').slice(0, 120), content: `${snippet}${nutritionLines(x.raw_content)}` }
-    })
+      return { site, url: String(x.url ?? '').slice(0, 400), title: String(x.title ?? '').slice(0, 120), content: `${snippet}${nutritionLines(x.raw_content)}` }
+    // Checked here too, in case the search returns one anyway (seen 21/11/2026: eggs "from facebook.com").
+    }).filter((x) => !UNTRUSTED_SITES.some((u) => x.site === u || x.site.endsWith(`.${u}`)))
   } catch {
     return []
   }
@@ -739,11 +880,15 @@ function toJsonSchema(s) {
 /** Gemini payload -> Claude Messages request. Gemini's "high" thinking -> effort high, everything else -> low. */
 function toClaude(model, payload, stream) {
   const g = payload.generationConfig ?? {}
-  const parts = payload.contents?.[0]?.parts ?? []
-  const images = parts.filter((p) => p.inline_data).map((p) => ({
-    type: 'image', source: { type: 'base64', media_type: p.inline_data.mime_type || 'image/jpeg', data: p.inline_data.data },
-  }))
-  const texts = parts.filter((p) => p.text).map((p) => ({ type: 'text', text: p.text }))
+  // Each Gemini turn -> one Claude message ("model" = Claude's earlier answer). Images go before the text in a turn.
+  const messages = (payload.contents ?? []).map((c) => {
+    const parts = c.parts ?? []
+    const images = parts.filter((p) => p.inline_data).map((p) => ({
+      type: 'image', source: { type: 'base64', media_type: p.inline_data.mime_type || 'image/jpeg', data: p.inline_data.data },
+    }))
+    const texts = parts.filter((p) => p.text).map((p) => ({ type: 'text', text: p.text }))
+    return { role: c.role === 'model' ? 'assistant' : 'user', content: [...images, ...texts] }
+  })
   return {
     model,
     max_tokens: 16_000,
@@ -754,7 +899,7 @@ function toClaude(model, payload, stream) {
       effort: g.thinkingConfig?.thinkingLevel === 'high' ? 'high' : 'low',
       ...(g.responseSchema ? { format: { type: 'json_schema', schema: toJsonSchema(g.responseSchema) } } : {}),
     },
-    messages: [{ role: 'user', content: [...images, ...texts] }],
+    messages,
   }
 }
 

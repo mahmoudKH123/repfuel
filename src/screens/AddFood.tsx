@@ -6,9 +6,9 @@ import { logFood, logQuick, saveFood } from '../db/repo'
 import { undoable } from '../db/undo'
 import type { Food, FoodCategory, Macros, Unit } from '../db/types'
 import { autoKcal, defaultAmount, kcalLooksWrong, scaleFood } from '../logic/macros'
-import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type AiMeal, type MealItem } from '../logic/meal'
+import { buildItems, cycleUnit, foodsContext, itemInfo, itemMacros, labelGrams, mealTotals, toFood, type AiMeal, type MealItem, type SourceType } from '../logic/meal'
 import { formatDay } from '../logic/dates'
-import { askPhoto, askSearch, photoToBase64, type AiFood, type PhotoEvent, type PhotoKind } from '../logic/ai'
+import { askPhoto, askSearch, photoToBase64, type AiFood, type PhotoEvent, type PhotoKind, type SearchCtx, type SearchEvent } from '../logic/ai'
 import { searchByName } from '../logic/search'
 import { FoodForm } from './FoodForm'
 import { useWeek } from '../ui/hooks'
@@ -47,14 +47,28 @@ interface Draft extends Macros {
   liquid?: boolean
   /** Unit the amount box opens in, when it differs from `unit` (e.g. AI eggs: macros per g, shown as pieces). */
   initialUnit?: AmountUnit
-  /** Site the AI found the numbers on (web search). */
+  /** Site the AI found the numbers on (web search), the exact page, and what kind of source it is. */
   web?: string
+  webUrl?: string
+  webType?: SourceType
   /** Amount guessed from a food photo: shown with Smaller / As guessed / Bigger so you check it. */
   guessed?: boolean
 }
 
-/** A typed AI result: the words you typed, and how many times it was fixed (so the screen refreshes in place). */
-interface AiCtx { text: string; rev: number }
+/** A typed AI result: the words you typed, how many times it was fixed (so the screen refreshes in place), and the AI's conversation so far. */
+interface AiCtx { text: string; rev: number; ctx?: SearchCtx }
+
+/** Live state of a typed search: steps done so far and what the AI has reported. */
+interface SearchRun {
+  kind: 'search'
+  text: string
+  done: number
+  queries?: string[]
+  count?: number
+  sites?: string[]
+  items: { name: string; kcal?: number }[]
+  retried?: boolean
+}
 
 /** Live state of a photo being analysed: how many steps are done and what the AI has said so far. */
 interface PhotoRun {
@@ -69,7 +83,7 @@ interface PhotoRun {
   checking?: boolean
 }
 
-type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | { kind: 'busy'; label: string } | PhotoRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft; ai?: AiCtx } | { kind: 'meal'; name: string; items: MealItem[]; ai?: AiCtx; guessed?: boolean }
+type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | PhotoRun | SearchRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft; ai?: AiCtx } | { kind: 'meal'; name: string; items: MealItem[]; ai?: AiCtx; guessed?: boolean }
 
 export function AddFood({ date, today, onClose }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
@@ -151,25 +165,52 @@ export function AddFood({ date, today, onClose }: Props) {
   })
 
   // Described food or meal: the AI searches the web, then splits it into items. One item opens the normal detail; more open the meal list.
+  // Each step the AI reports (planned, searched, read, items) ticks off on screen as it happens.
   const runMeal = async (text: string) => {
+    const id = ++run.current
+    const live = () => run.current === id
+    const step = (f: (r: SearchRun) => SearchRun) => { if (live()) setView((v) => (v.kind === 'search' ? f(v) : v)) }
     setError('')
-    setView({ kind: 'busy', label: 'Searching the web…' })
+    setView({ kind: 'search', text, done: 0, items: [] })
+    const onEvent = (e: SearchEvent) => step((r) => {
+      if (e.t === 'start') return { ...r, done: Math.max(r.done, 1) }
+      if (e.t === 'plan') return { ...r, queries: e.queries, done: e.queries.length ? 2 : 3 }
+      if (e.t === 'read') return { ...r, count: e.count, sites: e.sites, done: 3 }
+      if (e.t === 'think') return { ...r, done: Math.max(r.done, 3) }
+      if (e.t === 'retry') return { ...r, items: [], retried: true }
+      const items = [...r.items]
+      items[e.i] = { name: e.name, kcal: e.kcal ?? items[e.i]?.kcal }
+      return { ...r, items }
+    })
     try {
-      showMeal(await askSearch(text, foodsContext(foods)), { text, rev: 0 })
+      const res = await askSearch(text, foodsContext(foods), onEvent)
+      if (!live()) return
+      // Let the last tick and chips land before moving on.
+      step((r) => ({ ...r, done: 4 }))
+      await new Promise((ok) => setTimeout(ok, 450))
+      if (live()) showMeal(res.meal, { text, rev: 0, ctx: res.ctx })
     } catch (e) {
+      if (!live()) return
       setError(e instanceof Error ? e.message : 'Something went wrong.')
       setView({ kind: 'home' })
     }
   }
 
-  // "It was 3 eggs, no oil": the AI corrects what the screen shows now, and the same screen updates. Errors show in the fix box.
-  const fixMeal = async (ai: AiCtx, correction: string, current: string, file?: File) => {
-    let photo
+  // "It was 3 eggs, no oil": the AI continues the same conversation (same pages, its last answer) and the same screen
+  // updates. `onStep` shows what it is doing in the fix box. Errors show in the fix box.
+  const fixMeal = async (ai: AiCtx, correction: string, current: string, file: File | undefined, onStep: (s: string) => void) => {
+    let photo: { image: string; mimeType: string } | undefined
     if (file) {
       try { photo = await photoToBase64(file) } catch { throw new Error('Could not open that photo. Try another one.') }
     }
-    const meal = await askSearch(ai.text, foodsContext(foods), { text: correction || '(photo)', current, photo })
-    showMeal(meal, { text: ai.text, rev: ai.rev + 1 })
+    const res = await askSearch(ai.text, foodsContext(foods), (e) => {
+      if (e.t === 'start') onStep(photo ? 'Reading your photo' : 'Reading your fix')
+      else if (e.t === 'plan') onStep(e.queries.length ? `Looking up ${e.queries[0]}` : 'No new search needed')
+      else if (e.t === 'read') onStep(`Found ${e.count} result${e.count === 1 ? '' : 's'}${e.sites.length ? ` on ${e.sites[0]}` : ''}`)
+      else if (e.t === 'think') onStep('Updating the numbers')
+      else if (e.t === 'item') onStep(`Updated ${e.name}`)
+    }, { text: correction || '(photo)', current, photo, ctx: ai.ctx })
+    showMeal(res.meal, { text: ai.text, rev: ai.rev + 1, ctx: res.ctx ?? ai.ctx })
   }
 
   const showMeal = (meal: AiMeal, ai?: AiCtx, guessed?: boolean) => {
@@ -183,7 +224,7 @@ export function AddFood({ date, today, onClose }: Props) {
         // Countable (egg, banana): numbers per piece so the page says "eggs"; otherwise per the weight eaten.
         const perPiece = i.baseUnit !== 'serving' && i.gramsPerServing
         const base = perPiece ? round1All(scaleFood({ ...i.base, baseAmount: i.baseAmount }, i.gramsPerServing!)) : i.base
-        setView({ kind: 'detail', ai, draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: i.estimate, web: i.source, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, guessed, ...base } })
+        setView({ kind: 'detail', ai, draft: { source: 'ai', name: i.name, baseAmount: perPiece ? 1 : i.baseAmount, unit: perPiece ? 'serving' : i.baseUnit, servingLabel: perPiece || i.baseUnit === 'serving' ? i.servingLabel : `${i.baseAmount} ${i.baseUnit}`, amount: i.amount, initialUnit: i.unit, estimate: i.estimate, web: i.source, webUrl: i.sourceUrl, webType: i.sourceType, confidence: i.confidence, note: i.note, gramsPerServing: i.gramsPerServing, liquid: i.liquid, guessed, ...base } })
       }
       return
     }
@@ -349,14 +390,10 @@ export function AddFood({ date, today, onClose }: Props) {
         <FoodForm food={view.food} onDone={() => setView({ kind: 'home' })} />
       )}
 
-      {view.kind === 'busy' && (
-        <div className="add-busy">
-          <div className="add-progress"><span /></div>
-          <p>{view.label}</p>
-        </div>
-      )}
 
       {view.kind === 'photo' && <PhotoProgress run={view} />}
+
+      {view.kind === 'search' && <SearchProgress run={view} />}
 
       {view.kind === 'nofood' && (
         <div className="add-busy add-nofood">
@@ -372,7 +409,7 @@ export function AddFood({ date, today, onClose }: Props) {
 
       {view.kind === 'detail' && (
         <Detail
-          key={view.draft.name + view.draft.source + (view.ai?.rev ?? '')} draft={view.draft} onFix={view.ai ? (c, cur, f) => fixMeal(view.ai!, c, cur, f) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
+          key={view.draft.name + view.draft.source + (view.ai?.rev ?? '')} draft={view.draft} onFix={view.ai ? (c, cur, f, st) => fixMeal(view.ai!, c, cur, f, st) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish}
           toPlate={plate.length && view.draft.food ? (amount, from) => {
             // Building a plate: the chosen amount goes on it (or updates it) instead of logging straight away.
             const id = view.draft.food!.id!
@@ -383,7 +420,7 @@ export function AddFood({ date, today, onClose }: Props) {
       )}
 
       {view.kind === 'meal' && (
-        <Meal key={view.ai?.rev ?? 0} name={view.name} initial={view.items} guessed={view.guessed} onFix={view.ai ? (c, cur, f) => fixMeal(view.ai!, c, cur, f) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
+        <Meal key={view.ai?.rev ?? 0} name={view.name} initial={view.items} guessed={view.guessed} onFix={view.ai ? (c, cur, f, st) => fixMeal(view.ai!, c, cur, f, st) : undefined} eaten={day?.eaten.kcal ?? 0} target={day?.target.kcal ?? 0} date={date} onDone={finish} />
       )}
 
       {view.kind === 'home' && plateItems.length > 0 && (
@@ -407,6 +444,94 @@ export function AddFood({ date, today, onClose }: Props) {
   )
 }
 
+/** One row of live steps: a spinner while doing, a tick when done. Shared by the photo and search screens. */
+function Steps({ steps, done }: { steps: [string, string][]; done: number }) {
+  return (
+    <ol className="add-steps">
+      {steps.map(([doing, did], i) => {
+        const state = i < done ? 'did' : i === done ? 'doing' : 'todo'
+        return (
+          <li key={i} className={state}>
+            <span className="add-step-dot" aria-hidden="true">
+              {state === 'did' && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
+            </span>
+            <span key={state === 'did' ? did : doing} className="add-step-text">{state === 'did' ? did : doing}</span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+/** A typed search: what you typed, the real steps the AI reports (plan, search, read, work out), and items popping in. */
+function SearchProgress({ run }: { run: SearchRun }) {
+  const { done, queries, count = 0, sites = [], items } = run
+  const searched = !queries || queries.length > 0
+  const look = !queries?.length ? 'No web search needed' : `Looking up "${queries[0]}"${queries.length > 1 ? ` and ${queries.length - 1} more` : ''}`
+  const steps: [string, string][] = [
+    ['Sending to AI', 'Sent to AI'],
+    ['Planning what to look up', look],
+    ...(searched ? [['Searching the web', count ? `Found ${count} result${count === 1 ? '' : 's'}${sites.length ? ` on ${sites.join(', ')}` : ''}` : 'Nothing found online'] as [string, string]] : []),
+    [searched && count ? 'Reading the results, working out the numbers' : 'Working out the numbers', 'Numbers worked out'],
+  ]
+  // Without a web search there is one step fewer, so the counter skips it.
+  const shown = searched ? done : done >= 3 ? done - 1 : done
+  return (
+    <div className="add-busy add-scan" aria-live="polite">
+      <p className="add-query">{run.text}</p>
+      <Steps steps={steps} done={shown} />
+      {run.retried && <p className="add-retry">First try failed, trying again</p>}
+      {items.length > 0 && (
+        <ul className="add-found">
+          {items.map((it, i) => it && (
+            <li key={i}>{it.name}{it.kcal !== undefined && <b>{k(it.kcal)} kcal</b>}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+const SOURCE_LABEL: Record<SourceType, string> = {
+  restaurant: 'Restaurant menu', brand: 'Brand site', database: 'Nutrition database', label: 'Pack label', user: 'Your numbers', estimate: 'Estimate', other: 'Web page',
+}
+
+/** Small line icon per source type (flat, 1.8 stroke, same family as the rest of the app). */
+function SourceIcon({ type }: { type: SourceType }) {
+  const d: Record<SourceType, ReactNode> = {
+    restaurant: <><path d="M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10" /><path d="M17 21V3c-2 1.5-3 4-3 7v3h3" /></>,
+    brand: <><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z" /><circle cx="7.5" cy="7.5" r="1.3" /></>,
+    database: <><ellipse cx="12" cy="5.5" rx="7" ry="2.5" /><path d="M5 5.5v13c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-13M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" /></>,
+    label: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M8.5 8h7M8.5 12h7M8.5 16h4" /></>,
+    user: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20c1-3.6 3.8-5.5 7-5.5s6 1.9 7 5.5" /></>,
+    estimate: <><path d="M5 9.5c2.3-2 4.7-2 7 0s4.7 2 7 0M5 15c2.3-2 4.7-2 7 0s4.7 2 7 0" /></>,
+    other: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c2.5 2.6 3.7 5.6 3.7 9s-1.2 6.4-3.7 9c-2.5-2.6-3.7-5.6-3.7-9S9.5 5.6 12 3z" /></>,
+  }
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d[type]}</svg>
+}
+
+/**
+ * Where the numbers came from, in one calm line: type icon + label + site (a link to the exact page when known),
+ * and what was used on a second, quieter line. `compact` = the smaller version for meal rows.
+ */
+function SourceLine({ type, site, url, note, compact }: { type: SourceType; site?: string; url?: string; note?: string; compact?: boolean }) {
+  const where = type === 'estimate' ? 'no source found' : type === 'user' || type === 'label' ? '' : site
+  const head = (
+    <>
+      <SourceIcon type={type} />
+      <span className="src-kind">{SOURCE_LABEL[type]}</span>
+      {where && <span className="src-site">· {where}</span>}
+      {url && <svg className="src-go" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>}
+    </>
+  )
+  return (
+    <div className={`src${compact ? ' compact' : ''}${type === 'estimate' ? ' est' : ''}`}>
+      {url ? <a className="src-head" href={url} target="_blank" rel="noopener noreferrer" aria-label={`${SOURCE_LABEL[type]}, ${site ?? ''}: open the page`}>{head}</a> : <span className="src-head">{head}</span>}
+      {note && <span className="src-note">{note}</span>}
+    </div>
+  )
+}
+
 /** The photo being analysed, with real steps ticking off as the AI reports them and the items it finds popping in. */
 function PhotoProgress({ run }: { run: PhotoRun }) {
   const { done, found, seen, items, checking } = run
@@ -423,19 +548,7 @@ function PhotoProgress({ run }: { run: PhotoRun }) {
         <img src={run.photo} alt="" className="add-photo" />
         <span className="add-sweep" aria-hidden="true" />
       </div>
-      <ol className="add-steps">
-        {steps.map(([doing, did], i) => {
-          const state = i < done ? 'did' : i === done ? 'doing' : 'todo'
-          return (
-            <li key={i} className={state}>
-              <span className="add-step-dot" aria-hidden="true">
-                {state === 'did' && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
-              </span>
-              <span key={state === 'did' ? did : doing} className="add-step-text">{state === 'did' ? did : doing}</span>
-            </li>
-          )
-        })}
-      </ol>
+      <Steps steps={steps} done={done} />
       {run.retried && done < 3 && <p className="add-retry">First AI was busy, asking another</p>}
       {items.length > 0 && (
         <ul className="add-found">
@@ -622,7 +735,7 @@ const MAC = [
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ] as const
 
-type OnFix = (correction: string, current: string, photo?: File) => Promise<void>
+type OnFix = (correction: string, current: string, photo: File | undefined, onStep: (s: string) => void) => Promise<void>
 
 function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: { draft: Draft; eaten: number; target: number; date: string; onDone: (id: number, name: string) => void; onEdit?: () => void; toPlate?: (amount: number, from: Element) => void; onFix?: OnFix }) {
   const editable = draft.source !== 'saved'
@@ -713,12 +826,13 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
           <h2 className="add-name">{name}</h2>
         )}
         <p className="add-per">
-          {draft.confidence && <span className={`tag${draft.confidence === 'low' ? ' warn' : ''}`}>{draft.confidence} confidence</span>}
-          {draft.estimate && <span className="tag">estimate</span>}
+          {/* A real source says more than a confidence word, so the chip only shows for estimates and older results. */}
+          {draft.confidence && (!draft.webType || draft.webType === 'estimate') && <span className={`tag${draft.confidence === 'low' ? ' warn' : ''}`}>{draft.confidence} confidence</span>}
+          {draft.estimate && !draft.webType && <span className="tag">estimate</span>}
           {draft.source === 'label' && <span className="tag">from label</span>}
-          {draft.web && <span className="tag mine">from {draft.web}</span>}
+          {draft.web && !draft.webType && <span className="tag mine">from {draft.web}</span>}
         </p>
-        {draft.note && <p className="muted add-note">{draft.note}</p>}
+        {draft.webType ? <SourceLine type={draft.webType} site={draft.web} url={draft.webUrl} note={draft.note} /> : draft.note && <p className="muted add-note">{draft.note}</p>}
       </div>
 
       <div className="add-macros">
@@ -806,7 +920,7 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
         </button>
       )}
 
-      {onFix && <FixBox onFix={(c, f) => onFix(c, `${name.trim() || draft.name}${draft.source === 'saved' ? ' (saved food)' : ''}${draft.web ? ` (from ${draft.web})` : ''}: ${fmtQty(amt, unit)} ${unitName(unit, noun, false, amt)} = ${macroText(portion)}`, f)} />}
+      {onFix && <FixBox onFix={(c, f, st) => onFix(c, `${name.trim() || draft.name}${draft.source === 'saved' ? ' (saved food)' : ''}${draft.web ? ` (from ${draft.web})` : ''}: ${fmtQty(amt, unit)} ${unitName(unit, noun, false, amt)} = ${macroText(portion)}`, f, st)} />}
 
       {error && <p className="warn add-error">{error}</p>}
       <Dock><button type="submit" form="add-form" className="primary add-go">{toPlate ? 'Put on plate' : 'Add'} {amt > 0 ? `${k(portion.kcal)} kcal` : ''}</button></Dock>
@@ -887,7 +1001,7 @@ function Meal({ name: initialName, initial, guessed, eaten, target, date, onDone
         {items.map((i, n) => <MealRow key={i.key} item={i} index={n} guess={guessed && !i.food ? initial.find((g) => g.key === i.key) : undefined} onChange={(p) => set(i.key, p)} />)}
       </ul>
 
-      {onFix && <FixBox onFix={(c, f) => onFix(c, on.map((i) => `${i.name}${i.food ? ' (saved food)' : ''}${i.source ? ` (from ${i.source})` : ''}: ${fmtQty(i.amount, i.unit)} ${unitName(i.unit, servingNoun(i.servingLabel), false, i.amount)} = ${macroText(itemMacros(i))}`).join('\n'), f)} />}
+      {onFix && <FixBox onFix={(c, f, st) => onFix(c, on.map((i) => `${i.name}${i.food ? ' (saved food)' : ''}${i.source ? ` (from ${i.source})` : ''}: ${fmtQty(i.amount, i.unit)} ${unitName(i.unit, servingNoun(i.servingLabel), false, i.amount)} = ${macroText(itemMacros(i))}`).join('\n'), f, st)} />}
 
       {error && <p className="warn add-error">{error}</p>}
       <Dock><button type="submit" form="add-form" className="primary add-go" disabled={busy}>Add meal {on.length ? `${k(totals.kcal)} kcal` : ''}</button></Dock>
@@ -911,10 +1025,12 @@ function MealRow({ item: i, index, guess, onChange }: { item: MealItem; index: n
         </button>
         <span className="meal-text">
           {i.food ? <strong>{i.name}</strong> : <input value={i.name} onChange={(e) => onChange({ name: e.target.value })} aria-label="Item name" />}
-          <small>
-            {i.food ? <span className="tag mine">your food</span> : i.source ? <span className="tag mine">{i.source}</span> : <span className={`tag${i.confidence === 'low' ? ' warn' : ''}`}>{i.confidence}</span>}
-            {i.note || i.servingLabel}
-          </small>
+          {!i.food && i.sourceType ? <SourceLine compact type={i.sourceType} site={i.source} url={i.sourceUrl} note={i.note || i.servingLabel} /> : (
+            <small>
+              {i.food ? <span className="tag mine">your food</span> : i.source ? <span className="tag mine">{i.source}</span> : <span className={`tag${i.confidence === 'low' ? ' warn' : ''}`}>{i.confidence}</span>}
+              {i.note || i.servingLabel}
+            </small>
+          )}
           <span className="add-ribbon" style={blend(m)} aria-hidden="true" />
         </span>
         <span className="add-kcal">{k(m.kcal)}<small>kcal</small></span>
@@ -1006,8 +1122,9 @@ function Describe({ initial, onEstimate }: { initial: string; onEstimate: (text:
 const macroText = (m: Macros) => `${Math.round(m.kcal)} kcal, P ${Math.round(m.protein)} g, C ${Math.round(m.carbs)} g, F ${Math.round(m.fat)} g`
 
 /** "Not quite right?": type a correction and/or add a photo (label or the food); the AI updates this same screen. */
-function FixBox({ onFix }: { onFix: (text: string, photo?: File) => Promise<void> }) {
+function FixBox({ onFix }: { onFix: (text: string, photo: File | undefined, onStep: (s: string) => void) => Promise<void> }) {
   const [text, setText] = useState('')
+  const [stepText, setStepText] = useState('')
   const [photo, setPhoto] = useState<File | null>(null)
   const [thumb, setThumb] = useState('')
   const [busy, setBusy] = useState(false)
@@ -1026,8 +1143,9 @@ function FixBox({ onFix }: { onFix: (text: string, photo?: File) => Promise<void
     if ((!t && !photo) || busy) return
     setBusy(true)
     setError('')
+    setStepText('Sending to AI')
     // On success the screen re-opens with the fixed numbers, so this box starts fresh.
-    try { await onFix(t, photo ?? undefined) } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); setBusy(false) }
+    try { await onFix(t, photo ?? undefined, setStepText) } catch (e) { setError(e instanceof Error ? e.message : 'Something went wrong.'); setBusy(false) }
   }
   return (
     <div className={`card add-fix${busy ? ' busy' : ''}`}>
@@ -1036,7 +1154,7 @@ function FixBox({ onFix }: { onFix: (text: string, photo?: File) => Promise<void
       {thumb && (
         <div className="add-fix-photo">
           <img src={thumb} alt="Photo for the fix" />
-          <span>{busy ? 'Reading photo…' : 'Photo added'}</span>
+          <span>Photo added</span>
           {!busy && <button type="button" onClick={clear} aria-label="Remove photo">×</button>}
         </div>
       )}
@@ -1052,7 +1170,12 @@ function FixBox({ onFix }: { onFix: (text: string, photo?: File) => Promise<void
         />
         <button type="button" className="add-fix-go" disabled={(!text.trim() && !photo) || busy} onClick={go}>{busy ? 'Fixing…' : 'Fix'}</button>
       </div>
-      {busy && <div className="add-progress"><span /></div>}
+      {busy && (
+        <div className="add-fix-live" aria-live="polite">
+          <span className="add-step-dot" aria-hidden="true" />
+          <span key={stepText} className="add-step-text">{stepText}</span>
+        </div>
+      )}
       {error && <p className="warn">{error}</p>}
     </div>
   )
