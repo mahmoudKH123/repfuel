@@ -4,8 +4,8 @@ import { Intro } from './Intro'
 
 /* Launch intro gate. While the intro plays, the page underneath is already rendered (so the logo knows where to fly)
    but its entrance motion is held: CSS animations pause via html[data-intro='build'] until the flight starts ('fly'),
-   and number count-ups, bar fills, the calorie flow and Today's figure (ui/motion.ts, Budget, FuelFigure) wait in this
-   queue until the logo lands in the greeting's mark, so the page settles in around it. */
+   and number count-ups, bar fills, the calorie flow and Today's Fuel Bar (ui/motion.ts, Budget, FuelBar) wait in this
+   queue until the logo's dumbbell lands on the Fuel Bar, so the page settles in around it. */
 let queue: (() => void)[] | null = null
 
 /** Runs `f` now, or when the intro releases the page. Returns a cancel function. */
@@ -13,6 +13,11 @@ export function afterIntro(f: () => void): () => void {
   if (!queue) { f(); return () => {} }
   queue.push(f)
   return () => { if (queue) queue = queue.filter((x) => x !== f) }
+}
+
+/** True while the launch intro is still holding the page. */
+export function introRunning(): boolean {
+  return queue !== null
 }
 
 function flush() {

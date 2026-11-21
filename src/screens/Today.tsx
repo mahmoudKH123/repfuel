@@ -11,8 +11,7 @@ import { useSettings, useWeek } from '../ui/hooks'
 import { fmtAmount } from '../ui/format'
 import { useSwipe } from '../ui/motion'
 import { Budget } from '../ui/Budget'
-import { FuelFigure } from '../ui/FuelFigure'
-import type { FigureKind } from '../ui/figure'
+import { FuelBar, type Lift } from '../ui/FuelBar'
 import { Water } from '../ui/Water'
 import { DEFAULT_WATER_GOAL } from '../db/defaults'
 
@@ -33,19 +32,6 @@ const TIMES = [
   { key: 'afternoon', label: 'Afternoon', until: 17 },
   { key: 'evening', label: 'Evening', until: 24 },
 ] as const
-
-/** Which figure shows the day: matched on the workout's id and names, so renamed or added days still find theirs.
- *  A rest day, or a workout it can't place, shows him standing. */
-function figureFor(training: boolean, workout?: { id: string; name: string; short: string }): FigureKind {
-  if (!training || !workout) return 'rest'
-  const t = `${workout.id} ${workout.name} ${workout.short}`.toLowerCase()
-  if (/c&b|chest\s*(&|and)\s*back|chestback/.test(t)) return 'cb'
-  if (/push|chest/.test(t)) return 'push'
-  if (/pull|back/.test(t)) return 'pull'
-  if (/leg/.test(t)) return 'legs'
-  if (/arm|bicep|shoulder/.test(t)) return 'arms'
-  return 'rest'
-}
 
 export function Today({ date, today, onDateChange, onAdd }: Props) {
   const settings = useSettings()
@@ -76,6 +62,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
   const plan = useLiveQuery(() => db.weeks.get(monday), [monday])
   const planDays = useLiveQuery(() => db.plan.toArray(), [])
   const session = useLiveQuery(() => db.sessions.where('date').equals(date).first(), [date])
+  const exercises = useLiveQuery(() => db.exercises.toArray(), [])
 
   const day = week?.days.find((d) => d.date === date)
   if (!week || !day) return null
@@ -93,7 +80,8 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
   const doneId = session && session.done.length > 0 ? session.dayId : undefined
   const workout = planDays?.find((d) => d.id === (doneId ?? plan?.days[dayIndex(monday, date)]))
   const word = (training ? workout?.short || 'Train' : 'Rest').toUpperCase()
-  const figure = figureFor(training, workout)
+  // The Fuel Bar's plates: one per exercise, lit once it's done.
+  const lifts: Lift[] = (workout?.exerciseIds ?? []).flatMap((id) => (exercises?.some((e) => e.id === id) ? [{ id, done: !!session?.done.includes(id) }] : []))
   const toggleType = () => undoable(
     `${formatDay(date)}: ${training ? 'Training → Rest' : 'Rest → Training'}`,
     () => setDayType(date, training ? 'rest' : 'training', defaultDayType(date, settings)),
@@ -113,7 +101,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
       )}
 
       <div key={`b-${date}`} className={`dayview ${shown.dir}`} {...swipe}>
-        {/* The hero: the workout word and the calories on the left, the day's figure on the right, macros under both. */}
+        {/* The hero: the workout word, the Fuel Bar (calories in the cell, lifts as plates), then the macros. */}
         <div className="td-hero">
           {/* Tap to switch Training / Rest. Training = solid word, Rest = outlined; letters drop in when it changes. */}
           <button key={word} className={`td-tag${training ? '' : ' rest'}`} onClick={toggleType} aria-label={`${training ? `Training day${workout ? `, ${workout.name}` : ''}` : 'Rest day'}. Tap to switch to ${training ? 'rest' : 'training'}`}>
@@ -122,7 +110,7 @@ export function Today({ date, today, onDateChange, onAdd }: Props) {
             </small>
             <b aria-hidden="true">{[...word].map((ch, i) => <span key={i} style={{ '--i': i } as CSSProperties}>{ch}</span>)}</b>
           </button>
-          <FuelFigure kind={figure} />
+          <FuelBar day={date} eaten={day.eaten.kcal} target={day.target.kcal} lifts={lifts} rest={!training} />
           <Budget compact eaten={day.eaten} target={day.target} fatOver={day.fatOver} />
         </div>
         <Water date={date} ml={water?.ml ?? 0} sips={water?.sips.length ?? 0} goal={settings.waterGoalMl ?? DEFAULT_WATER_GOAL} />

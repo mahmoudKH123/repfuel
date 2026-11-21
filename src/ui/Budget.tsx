@@ -3,6 +3,7 @@ import type { Macros } from '../db/types'
 import { useCountUp, useFill } from './motion'
 import { afterIntro } from './introGate'
 import { Odometer } from './Odometer'
+import { hot } from './heat'
 
 const k = (v: number) => Math.round(v).toLocaleString('en-US')
 const r1 = (v: number) => Math.round(v * 10) / 10
@@ -12,16 +13,6 @@ const MACROS = [
   { key: 'carbs', label: 'Carbs', color: 'var(--carbs)' },
   { key: 'fat', label: 'Fat', color: 'var(--fat)' },
 ] as const
-
-/** Going over, the colour heats up the further past the goal: green at it, then yellow (5% over), orange (15%) and
- *  red (30% and beyond), blended smoothly in between. The shades are theme tokens (--hot1..3 in index.css). */
-const HOT: [number, string][] = [[0, 'var(--kcal)'], [0.05, 'var(--hot1)'], [0.15, 'var(--hot2)'], [0.3, 'var(--hot3)']]
-function hot(over: number): string {
-  if (over >= HOT[HOT.length - 1][0]) return HOT[HOT.length - 1][1]
-  const i = Math.max(1, HOT.findIndex(([at]) => over <= at))
-  const [a, A] = HOT[i - 1], [b, B] = HOT[i], t = Math.max(0, (over - a) / (b - a))
-  return `color-mix(in srgb, ${A} ${((1 - t) * 100).toFixed(1)}%, ${B})`
-}
 
 /** Last fill level shown per page, so switching day carries the flow on from where it was. */
 const lastLevel = new Map<string, number>()
@@ -65,7 +56,7 @@ function useFlow(ratio: number, memo: string) {
 }
 
 /** The day's budget straight on the page: kcal left as the headline (eaten flowing up inside it), one bar, three macros. */
-/** `compact` (Today) drops the bar: the number itself shows how full the day is. */
+/** `compact` (Today) drops the number and the bar: the Fuel Bar above the macros shows both. */
 export function Budget({ eaten, target, fatOver, scope = 'today', compact = false }: { eaten: Macros; target: Macros; fatOver: number; scope?: string; compact?: boolean }) {
   const left = target.kcal - eaten.kcal
   const over = left < 0
@@ -82,11 +73,12 @@ export function Budget({ eaten, target, fatOver, scope = 'today', compact = fals
     : {}
   return (
     <div className={`td-budget${compact ? ' compact' : ''}`}>
-      <p className="td-big">
+      {/* On Today (compact) the headline number lives inside the Fuel Bar (ui/FuelBar.tsx). */}
+      {!compact && <p className="td-big">
         <span>{k(shown)}</span>
         <span className="td-flow" ref={flow} aria-hidden="true" style={over ? { color: hot(eaten.kcal / target.kcal - 1) } : undefined}>{k(shown)}</span>
-      </p>
-      <p className="td-cap">{over ? 'kcal over' : 'kcal left'} <span>of {k(target.kcal)}{scope === 'today' ? '' : ` ${scope}`}</span></p>
+      </p>}
+      {!compact && <p className="td-cap">{over ? 'kcal over' : 'kcal left'} <span>of {k(target.kcal)}{scope === 'today' ? '' : ` ${scope}`}</span></p>}
       {!compact && <div className="td-bar" role="progressbar" aria-label="Calories eaten" aria-valuenow={Math.round(eaten.kcal)} aria-valuemax={Math.round(target.kcal)}>
         <span style={{ width: `${fill * 100}%`, ...blend }} />
       </div>}

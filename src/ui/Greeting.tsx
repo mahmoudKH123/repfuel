@@ -2,10 +2,8 @@ import { type CSSProperties } from 'react'
 import { greetingFor, skyAt } from '../logic/sun'
 import { useNow } from './hooks'
 import { formatDay } from '../logic/dates'
-import { Logo } from './Logo'
 
-/** Top of every tab, as a large title: hello for the hour, your name, today's date, and the app mark on the right
- *  (the launch intro's logo glides into it). Plays once on open. */
+/** Top of every tab, as a large title: hello for the hour, your name and today's date. Plays once on open. */
 export function Greeting({ today, name }: { today: string; name: string }) {
   const now = useNow()
   const sky = skyAt(now)
@@ -18,7 +16,6 @@ export function Greeting({ today, name }: { today: string; name: string }) {
         </strong>
         <span className="gr-day">{formatDay(today, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
       </div>
-      <span className="gr-mark" aria-hidden="true"><Logo size={40} /></span>
     </div>
   )
 }
