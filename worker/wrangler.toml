@@ -8,8 +8,11 @@ ALLOWED_ORIGINS = "https://mahmoudkh123.github.io,http://127.0.0.1:5173"
 # Tried in order; the next one is used when a model's free daily limit is used up.
 # Google Search grounding is 0/day for Gemini 3+ on the free tier and 2.5 is closed to new users, so web search goes through Tavily.
 MODELS = "gemini-3.8-flash,gemini-3.5-flash-lite"
+# "claude" = use Claude Sonnet 5.5 (ANTHROPIC_API_KEY) instead of the Gemini MODELS above. Remove this line to go back to Gemini.
+PROVIDER = "claude"
 
 # Secrets (set with `npx wrangler secret put <NAME>`, never written here):
+#   ANTHROPIC_API_KEY - Claude API key (Anthropic Console key "repfuel-ai", prepaid credits, $5 monthly spend limit)
 #   GEMINI_API_KEY  - Google AI Studio key, on a project WITHOUT billing so it can only use the free tier
 #   PASSCODE        - private passcode, typed once in RepFuel > More
 #   TAVILY_API_KEY  - Tavily web search key (free plan, 1,000 searches a month); used by the "search" mode

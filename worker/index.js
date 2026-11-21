@@ -237,6 +237,19 @@ const MAX_FOODS_TEXT = 15_000 // saved-food list sent with meal requests
 
 // Low thinking keeps answers fast (default "medium" took 2+ minutes). Each model gets 25 s before we move on.
 const THINKING = { thinkingConfig: { thinkingLevel: 'low' } }
+
+// Claude (opt-in): PROVIDER = "claude" uses Claude with the ANTHROPIC_API_KEY secret. Without it, everything stays on Gemini.
+// One model only, no Gemini fallback (user's choice 21/11/2026): when Claude can't answer, the app shows why.
+const CLAUDE_MODEL = 'claude-sonnet-5-5'
+const CLAUDE_TIMEOUT_MS = 45_000
+const CREDITS_MSG = 'AI credits used up for now. Top up or raise the limit in the Anthropic Console, or add it by hand.'
+const useClaude = (env) => env.PROVIDER === 'claude'
+const modelList = (env) => (useClaude(env) ? [env.CLAUDE_MODEL || CLAUDE_MODEL] : env.MODELS.split(',').map((m) => m.trim()))
+const keyFor = (env) => (useClaude(env) ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY)
+const timeoutFor = (env) => (useClaude(env) ? CLAUDE_TIMEOUT_MS : MODEL_TIMEOUT_MS)
+const limitMsg = (env, status) => (useClaude(env)
+  ? (status === 429 ? 'AI is busy right now. Try again in a minute.' : 'AI is unavailable right now. Try again later.')
+  : (status === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.'))
 // Same seed every call: the same words give the same queries and the same answer (15/11: one shake gave 292, then 330).
 const SEED = { seed: 7 }
 const MODEL_TIMEOUT_MS = 25_000
@@ -260,11 +273,11 @@ async function recheckLabel(first, image, mimeType, env, deadline) {
     contents: [{ parts: [{ text: `${RULES_LABEL}\n\n${RULES_RECHECK(first)}` }, { inline_data: { mime_type: mimeType || 'image/jpeg', data: image } }] }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: LABEL_SCHEMA, thinkingConfig: { thinkingLevel: 'high' } },
   }
-  for (const model of env.MODELS.split(',').map((m) => m.trim()).reverse()) {
+  for (const model of modelList(env).reverse()) {
     const left = deadline - Date.now()
     if (left < 4_000) break
     const t0 = Date.now()
-    const r = await callModel(model, payload, env.GEMINI_API_KEY, Math.min(MODEL_TIMEOUT_MS, left))
+    const r = await callModel(model, payload, keyFor(env), Math.min(timeoutFor(env), left))
     console.log(JSON.stringify({ mode: 'recheck', model, status: r.status, ms: Date.now() - t0, firstOff: labelOff(first) }))
     if (r.status !== 200) continue
     const second = parseJson((r.data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''))
@@ -358,17 +371,18 @@ export default {
     const deadline = Date.now() + TOTAL_BUDGET_MS
     // Search: the fast model first. On the free tier the bigger one timed out (25 s) or was "high demand" on every call
     // (Vercel logs 15/11/2026), so it only wasted time; it stays as the fallback.
-    const models = env.MODELS.split(',').map((m) => m.trim())
+    const models = modelList(env)
     if (body.mode === 'search') models.reverse()
     for (const model of models) {
       const left = deadline - Date.now()
       if (left < 4_000) break
       const t0 = Date.now()
-      const r = await callModel(model, payload, env.GEMINI_API_KEY, Math.min(MODEL_TIMEOUT_MS, left))
+      const r = await callModel(model, payload, keyFor(env), Math.min(timeoutFor(env), left))
       // Status and timing only (never the key or food text), visible with `wrangler tail`.
       console.log(JSON.stringify({ mode: body.mode, model, status: r.status, ms: Date.now() - t0, error: r.error }))
       lastStatus = r.status
       // 429 = free limit used up, 404 = model retired, 5xx/504 = Google hiccup or too slow. Try the next model.
+      if (r.status === 402) return reply(402, { error: CREDITS_MSG })
       if (r.status === 429 || r.status === 404 || r.status >= 500) continue
       if (r.status !== 200) return reply(502, { error: `AI error (${r.status}).` })
       const data = r.data
@@ -384,9 +398,7 @@ export default {
       }
       return reply(200, { food: body.mode === 'label' ? fromLabel(await recheckLabel(raw, body.image, body.mimeType, env, deadline)) : fromText(raw), model })
     }
-    return reply(503, {
-      error: lastStatus === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.',
-    })
+    return reply(503, { error: limitMsg(env, lastStatus) })
   },
 }
 
@@ -454,11 +466,11 @@ async function webLookup(ask, env) {
   const t0 = Date.now()
   // Fastest model first: planning is simple and every second counts here.
   let queries = []
-  for (const model of env.MODELS.split(',').map((m) => m.trim()).reverse()) {
+  for (const model of modelList(env).reverse()) {
     const r = await callModel(model, {
       contents: [{ parts: [{ text: `${RULES_PLAN}\n\n${ask}` }] }],
       generationConfig: { responseMimeType: 'application/json', responseSchema: PLAN_SCHEMA, ...THINKING, ...SEED },
-    }, env.GEMINI_API_KEY, 10_000)
+    }, keyFor(env), useClaude(env) ? 15_000 : 10_000)
     if (r.status !== 200) continue
     const raw = parseJson((r.data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? '').join(''))
     queries = (Array.isArray(raw?.queries) ? raw.queries : []).map((q) => String(q).trim().slice(0, 200)).filter(Boolean).slice(0, 3)
@@ -543,15 +555,16 @@ function photoStream(payload, env, photo, headers) {
     try {
       await send({ t: 'start' })
       let tried = false
-      for (const model of env.MODELS.split(',').map((m) => m.trim())) {
+      for (const model of modelList(env)) {
         const left = deadline - Date.now()
         if (left < 4_000) break
         if (tried) await send({ t: 'retry' })
         tried = true
         const t0 = Date.now()
-        const r = await streamModel(model, payload, env.GEMINI_API_KEY, Math.min(MODEL_TIMEOUT_MS, left), deadline, send)
+        const r = await streamModel(model, payload, keyFor(env), Math.min(timeoutFor(env), left), deadline, send)
         console.log(JSON.stringify({ mode: 'photo', model, status: r.status, ms: Date.now() - t0, error: r.error }))
         lastStatus = r.status
+        if (r.status === 402) return await send({ t: 'error', error: CREDITS_MSG })
         if (r.status === 429 || r.status === 404 || r.status >= 500) continue
         if (r.status !== 200) return await send({ t: 'error', error: `AI error (${r.status}).` })
         const raw = parseJson(r.text)
@@ -562,7 +575,7 @@ function photoStream(payload, env, photo, headers) {
         }
         return await send(fromPhoto(raw))
       }
-      await send({ t: 'error', error: lastStatus === 429 ? 'Free AI limit reached for today. Add it by hand, or try again tomorrow.' : 'AI is unavailable right now. Try again later.' })
+      await send({ t: 'error', error: limitMsg(env, lastStatus) })
     } catch {
       await send({ t: 'error', error: 'AI is unavailable right now. Try again later.' }).catch(() => {})
     } finally {
@@ -621,6 +634,7 @@ function makeWatcher(send) {
  * Returns { status, text } or { status, error }.
  */
 async function streamModel(model, payload, key, firstMs, deadline, send) {
+  if (model.startsWith('claude-')) return streamClaude(model, payload, key, firstMs, deadline, send)
   const ctrl = new AbortController()
   let timer = setTimeout(() => ctrl.abort(), firstMs)
   const watch = makeWatcher(send)
@@ -675,6 +689,7 @@ async function streamModel(model, payload, key, firstMs, deadline, send) {
  * Returns { status, data } or { status, error }; 504 = too slow.
  */
 async function callModel(model, payload, key, ms) {
+  if (model.startsWith('claude-')) return callClaude(model, payload, key, ms)
   const ctrl = new AbortController()
   let timer
   const timeout = new Promise((resolve) => {
@@ -695,6 +710,152 @@ async function callModel(model, payload, key, ms) {
     }
   })()
   try { return await Promise.race([call, timeout]) } finally { clearTimeout(timer) }
+}
+
+// ---- Claude ----------------------------------------------------------------------------------------------------
+// The rest of this file builds Gemini-style payloads. These turn one into a Claude request and the answer back into
+// Gemini's shape, so every mode, check and stream event works the same on both.
+
+/** Gemini response schema (OBJECT, STRING, nullable...) -> the JSON Schema Claude's structured outputs take. */
+function toJsonSchema(s) {
+  const t = String(s.type).toLowerCase()
+  let out
+  if (t === 'object') {
+    out = {
+      type: 'object',
+      properties: Object.fromEntries(Object.entries(s.properties).map(([k, v]) => [k, toJsonSchema(v)])),
+      required: s.required ?? [],
+      additionalProperties: false,
+    }
+  } else if (t === 'array') {
+    out = { type: 'array', items: toJsonSchema(s.items) }
+  } else {
+    out = { type: t }
+    if (s.enum) out.enum = s.enum
+  }
+  return s.nullable ? { anyOf: [out, { type: 'null' }] } : out
+}
+
+/** Gemini payload -> Claude Messages request. Gemini's "high" thinking -> effort high, everything else -> low. */
+function toClaude(model, payload, stream) {
+  const g = payload.generationConfig ?? {}
+  const parts = payload.contents?.[0]?.parts ?? []
+  const images = parts.filter((p) => p.inline_data).map((p) => ({
+    type: 'image', source: { type: 'base64', media_type: p.inline_data.mime_type || 'image/jpeg', data: p.inline_data.data },
+  }))
+  const texts = parts.filter((p) => p.text).map((p) => ({ type: 'text', text: p.text }))
+  return {
+    model,
+    max_tokens: 16_000,
+    ...(stream ? { stream: true } : {}),
+    // Server-side fallback: if a safety check wrongly declines a food question, Anthropic retries it on another model.
+    fallbacks: 'default',
+    output_config: {
+      effort: g.thinkingConfig?.thinkingLevel === 'high' ? 'high' : 'low',
+      ...(g.responseSchema ? { format: { type: 'json_schema', schema: toJsonSchema(g.responseSchema) } } : {}),
+    },
+    messages: [{ role: 'user', content: [...images, ...texts] }],
+  }
+}
+
+const claudeHeaders = (key) => ({
+  'Content-Type': 'application/json',
+  'x-api-key': key ?? '',
+  'anthropic-version': '2026-10-21',
+  'anthropic-beta': 'server-side-fallback-2026-07-01',
+})
+
+/** Claude error -> status the main loop understands. 402 = credits or monthly spend limit used up. */
+function claudeFail(status, message) {
+  const error = String(message ?? '').slice(0, 300)
+  if (/credit balance|billing|usage limit|spend limit|spending limit/i.test(error)) return { status: 402, error }
+  return { status, error }
+}
+
+/** Token counts only (never the key or food text), visible with `wrangler tail` / Vercel logs. Used to measure cost per food. */
+const logUsage = (model, u, ms) => console.log(JSON.stringify({
+  claude: model, ms, in: u?.input_tokens ?? 0, out: u?.output_tokens ?? 0,
+  cacheRead: u?.cache_read_input_tokens ?? 0, cacheWrite: u?.cache_creation_input_tokens ?? 0,
+}))
+
+/** One Claude call with a hard time limit. Same return shape as callModel: { status, data } with data in Gemini's shape. */
+async function callClaude(model, payload, key, ms) {
+  const t0 = Date.now()
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: claudeHeaders(key),
+      body: JSON.stringify(toClaude(model, payload, false)),
+      signal: AbortSignal.timeout(ms),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) return claudeFail(res.status, data.error?.message)
+    logUsage(model, data.usage, Date.now() - t0)
+    if (data.stop_reason === 'refusal') return { status: 502, error: 'refusal' }
+    const text = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('')
+    return { status: 200, data: { candidates: [{ content: { parts: [{ text }] } }] } }
+  } catch {
+    return { status: 504, error: 'network or timeout' }
+  }
+}
+
+/** One streamed Claude call, same contract as streamModel: progress goes to `send` via the watcher, returns { status, text }. */
+async function streamClaude(model, payload, key, firstMs, deadline, send) {
+  const ctrl = new AbortController()
+  let timer = setTimeout(() => ctrl.abort(), firstMs)
+  const watch = makeWatcher(send)
+  const t0 = Date.now()
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: claudeHeaders(key),
+      body: JSON.stringify(toClaude(model, payload, true)),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      return claudeFail(res.status, data.error?.message)
+    }
+    const reader = res.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    let text = ''
+    let first = true
+    const usage = {}
+    let stop = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      if (first) {
+        first = false
+        clearTimeout(timer)
+        timer = setTimeout(() => ctrl.abort(), Math.max(1_000, deadline - Date.now()))
+      }
+      buf += dec.decode(value, { stream: true })
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim()
+        buf = buf.slice(nl + 1)
+        if (!line.startsWith('data:')) continue
+        let e
+        try { e = JSON.parse(line.slice(5)) } catch { continue }
+        if (e.type === 'message_start') Object.assign(usage, e.message?.usage)
+        else if (e.type === 'message_delta') { Object.assign(usage, e.usage); stop = e.delta?.stop_reason ?? stop }
+        else if (e.type === 'error') return claudeFail(e.error?.type === 'overloaded_error' ? 529 : 502, e.error?.message)
+        else if (e.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
+          text += e.delta.text
+          await watch(text)
+        }
+      }
+    }
+    logUsage(model, usage, Date.now() - t0)
+    if (stop === 'refusal') return { status: 502, error: 'refusal' }
+    return text ? { status: 200, text } : { status: 502, error: 'empty stream' }
+  } catch {
+    return { status: 504, error: 'network or timeout' }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Pulls the JSON object out of a reply, even if wrapped in ```json fences or extra words. */
