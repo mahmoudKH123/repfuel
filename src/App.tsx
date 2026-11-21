@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { todayKey } from './logic/dates'
 import { Today } from './screens/Today'
 import { Week } from './screens/Week'
@@ -37,6 +37,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [date, setDate] = useState(today)
   const [adding, setAdding] = useState(false)
+  const [addTabs, setAddTabs] = useState(false)
   const [themeMode, setThemeMode] = useTheme()
   const settings = useSettings()
   const [seenToday, setSeenToday] = useState(today)
@@ -66,8 +67,30 @@ export default function App() {
   // Each tab has its own colour world (see index.css); on <html> so sheets and panels follow too.
   useEffect(() => { document.documentElement.dataset.world = adding ? 'add' : tab }, [adding, tab])
 
+  // The tab bar. On Add food's list it stays up with the bubble behind the + (you're adding); a tab takes you there.
+  const go = (t: Tab) => { setAdding(false); setTab(t) }
+  const tabBar = (
+    <>
+      <div className="tabs-edge" aria-hidden="true" />
+      <nav className="tabs" aria-label="Sections" style={{ '--slot': adding ? 2 : [0, 1, 3, 4][TABS.findIndex((t) => t.id === tab)] ?? 0 } as CSSProperties}>
+        <span className="tab-bubble" aria-hidden="true" />
+        {TABS.map((t, i) => (
+          <Fragment key={t.id}>
+            {i === 2 && (
+              <button className="tab-add" onClick={adding ? undefined : openAdd} aria-label="Add food" aria-current={adding ? 'page' : undefined}><span key={adding ? 'add' : tab}><IconPlus /></span></button>
+            )}
+            <button aria-current={!adding && tab === t.id ? 'page' : undefined} onClick={() => go(t.id)}>
+              {t.icon}
+              <span>{t.label}</span>
+            </button>
+          </Fragment>
+        ))}
+      </nav>
+    </>
+  )
+
   // The undo pill stays mounted in the same place whichever view is showing.
-  if (adding) return <><><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} /></div><div className="aurora aurora-cover" aria-hidden="true" /></><UndoPill /></>
+  if (adding) return <><><div className="aurora" aria-hidden="true" /><div className="app"><AddFood date={date} today={today} onClose={() => setAdding(false)} onTabs={setAddTabs} />{addTabs && tabBar}</div><div className="aurora aurora-cover" aria-hidden="true" /></><UndoPill /></>
 
   return (
     <><div className="app">
@@ -84,19 +107,7 @@ export default function App() {
         )}
       </main>
       <div className="aurora aurora-cover" aria-hidden="true" />
-      <nav className="tabs" aria-label="Sections">
-        {TABS.map((t, i) => (
-          <Fragment key={t.id}>
-            {i === 2 && (
-              <button className="tab-add" onClick={openAdd} aria-label="Add food"><span key={tab}><IconPlus /></span></button>
-            )}
-            <button aria-current={tab === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}>
-              {t.icon}
-              <span>{t.label}</span>
-            </button>
-          </Fragment>
-        ))}
-      </nav>
+      {tabBar}
     </div><UndoPill /></>
   )
 }

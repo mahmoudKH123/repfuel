@@ -21,6 +21,18 @@ const THICK = [56, 36, 30, 26, 22, 20], TALL = [220, 150, 128, 112, 100, 90], SI
 const MAX = THICK.length * 2
 const REST: Lift[] = [0, 1, 2, 3].map((i) => ({ id: `rest${i}`, done: false }))
 
+/* The logo's dumbbell (Logo.tsx, x 192-832, y 670-870) on this bar's grid: x - 192, heights x 1.1 (200 -> 220 tall).
+   Used for the launch hand-off, so the bar first shows exactly what the intro's dumbbell landed as. */
+const LOGO_PLATE = {
+  r: [{ x: 540, w: 56, h: 220 }, { x: 604, w: 36, h: 145.2 }],
+  l: [{ x: 44, w: 56, h: 220 }, { x: 0, w: 36, h: 145.2 }],
+}
+/** Transform that draws plate `p` where and how big the logo's plate `to` is (origin: the plate's own centre). */
+function toLogo(p: { x: number; w: number; h: number }, to: { x: number; w: number; h: number }) {
+  const dx = to.x + to.w / 2 - (p.x + p.w / 2)
+  return `translateX(${dx.toFixed(2)}px) scale(${(to.w / p.w).toFixed(4)}, ${(to.h / p.h).toFixed(4)})`
+}
+
 interface Plate { id: string; x: number; y: number; w: number; h: number; done: boolean; side: 'l' | 'r'; n: number }
 
 function load(lifts: Lift[]): Plate[] {
@@ -113,6 +125,19 @@ export function FuelBar({ day, eaten, target, lifts, rest }: {
   const [fromLogo] = useState(introRunning)
   const [ready, setReady] = useState(false)
   useEffect(() => afterIntro(() => requestAnimationFrame(() => setReady(true))), [])
+  // Hand-off phases: 'logo' = drawn exactly as the logo's dumbbell lands (same cell, solid plates, 2 a side), then
+  // 'morph' = everything eases from there into today's bar together, then 'off' (transitions back to normal).
+  const [phase, setPhase] = useState<'logo' | 'morph' | 'off'>(fromLogo ? 'logo' : 'off')
+  useEffect(() => {
+    if (!ready || phase !== 'logo') return
+    let id = requestAnimationFrame(() => { id = requestAnimationFrame(() => setPhase('morph')) })
+    return () => cancelAnimationFrame(id)
+  }, [ready, phase])
+  useEffect(() => {
+    if (phase !== 'morph') return
+    const t = window.setTimeout(() => setPhase('off'), 1400)
+    return () => window.clearTimeout(t)
+  }, [phase])
 
   const left = target - eaten
   const over = left < 0
@@ -122,6 +147,8 @@ export function FuelBar({ day, eaten, target, lifts, rest }: {
   const fuel = over ? hot(eaten / target - 1) : undefined
 
   const plates = load(rest ? REST : lifts)
+  // Logo plates a side doesn't have today (fewer than 2 lifts there): drawn where the logo had them, then they fade out.
+  const leaving = fromLogo ? (['l', 'r'] as const).flatMap((side) => [0, 1].filter((n) => !plates.some((p) => p.side === side && p.n === n)).map((n) => ({ side, n, ...LOGO_PLATE[side][n] }))) : []
   const doneCount = lifts.filter((l) => l.done).length
 
   // A lift finished since this day's bar was last on screen (you tick them in Train): once the bar has built, its
@@ -161,7 +188,7 @@ export function FuelBar({ day, eaten, target, lifts, rest }: {
   return (
       <div
         ref={bar}
-        className={`fb${ready ? ' fb-in' : ''}${fromLogo ? ' fb-handoff' : ''}`}
+        className={`fb${ready ? ' fb-in' : ''}${fromLogo ? ' fb-handoff' : ''}${phase === 'logo' ? ' fb-logo' : phase === 'morph' ? ' fb-morph' : ''}`}
         role="img"
         aria-label={`${Math.round(Math.abs(left)).toLocaleString('en-US')} kcal ${over ? 'over' : 'left'} of ${Math.round(target).toLocaleString('en-US')}${rest ? '' : `. ${doneCount} of ${lifts.length} lifts done`}`}
       >
@@ -185,13 +212,18 @@ export function FuelBar({ day, eaten, target, lifts, rest }: {
               key={p.id + p.side}
               className={`fb-plate ${p.side}${p.done ? ' done' : ''}${p.n < 2 ? ' logo' : ''}${hit.ids.includes(p.id) ? ' clunk' : ''}`}
               x={p.x} y={p.y} width={p.w} height={p.h} rx={Math.min(14, p.w / 2.4)}
-              style={{ '--d': `${(0.08 + p.n * 0.085 + (p.side === 'r' ? 0.04 : 0)).toFixed(3)}s` } as CSSProperties}
+              style={{ '--d': `${(0.08 + p.n * 0.085 + (p.side === 'r' ? 0.04 : 0)).toFixed(3)}s`, '--m': fromLogo && p.n < 2 ? toLogo(p, LOGO_PLATE[p.side][p.n]) : undefined } as CSSProperties}
             />
           ))}
-          <rect className="fb-cell" x={CELL.x} y={CELL.y} width={CELL.w} height={CELL.h} rx={CELL.h / 2} />
-          <g clipPath="url(#fb-clip)">
-            <path ref={charge} className="fb-charge" style={fuel ? { fill: fuel } : undefined} />
-            <rect className="fb-sheen" x={IN.x - 120} y={IN.y} width={120} height={IN.h} fill="url(#fb-sh)" />
+          {leaving.map((p) => (
+            <rect key={`leave${p.side}${p.n}`} className={`fb-plate logo leave ${p.side}`} x={p.x} y={CY - p.h / 2} width={p.w} height={p.h} rx={Math.min(14, p.w / 2.4)} />
+          ))}
+          <g className="fb-core">
+            <rect className="fb-cell" x={CELL.x} y={CELL.y} width={CELL.w} height={CELL.h} rx={CELL.h / 2} />
+            <g clipPath="url(#fb-clip)">
+              <path ref={charge} className="fb-charge" style={fuel ? { fill: fuel } : undefined} />
+              <rect className="fb-sheen" x={IN.x - 120} y={IN.y} width={120} height={IN.h} fill="url(#fb-sh)" />
+            </g>
           </g>
         </svg>
         {/* The numbers sit over the cell twice: plain, and inked where the fuel has reached. */}

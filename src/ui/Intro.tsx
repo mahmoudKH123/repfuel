@@ -49,10 +49,12 @@ export function Intro({ onRelease, onLand, onDone }: { onRelease: () => void; on
           { opacity: 0, transform: 'translateY(-18px) scale(0.9)', filter: 'blur(5px)' },
         ], { duration: 720, easing: 'cubic-bezier(0.4, 0, 0.6, 1)', fill: 'forwards' })
         handoff.move.onfinish = () => {
-          // Landed: the page settles in around the bar, the real bar takes over (same shape, same spot) and the overlay goes.
+          // Landed: the page settles in around the bar and the real bar appears underneath, drawn as this same dumbbell
+          // (FuelBar fb-logo); the copy then fades out over it rather than being cut, and the overlay goes.
           settlePage()
           onLand()
-          requestAnimationFrame(() => onDone())
+          const out = handoff.ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 240, delay: 50, easing: 'ease', fill: 'forwards' })
+          out.onfinish = () => onDone()
         }
         stop.current = handoff.cancel
       } else {
@@ -103,13 +105,24 @@ function settlePage() {
   tabs?.animate([{ opacity: 0, transform: 'translateY(24px)' }, { opacity: 1, transform: 'none' }], { duration: 560, delay: 120, easing: ease, fill: 'backwards' })
 }
 
+/** Where `el` will be once the page's entrance motion around it has finished (that motion starts as the flight does and
+ *  lifts the bar a few px): jumps each running animation on it and its ancestors to its end, measures, then puts them back. */
+function settledRect(el: Element): DOMRect {
+  const held: [Animation, CSSNumberish | null][] = []
+  for (let n: Element | null = el; n; n = n.parentElement) n.getAnimations().forEach((x) => held.push([x, x.currentTime]))
+  held.forEach(([x]) => { const end = x.effect?.getComputedTiming().endTime; if (typeof end === 'number' && Number.isFinite(end)) x.currentTime = end })
+  const r = el.getBoundingClientRect()
+  held.forEach(([x, t]) => { x.currentTime = t })
+  return r
+}
+
 /** The logo's dumbbell leaves the tile: a copy of it drops out and grows, without turning, straight onto Today's Fuel
  *  Bar (drawn on the logo's own 640-wide grid, so it lands on the same shape), while the tile, left with just the R,
  *  fades away. Returns the move and a cancel function. */
-function handDumbbell(tile: HTMLElement | null, layer: HTMLElement | null, dest: SVGSVGElement): { move: Animation; cancel: () => void } | undefined {
+function handDumbbell(tile: HTMLElement | null, layer: HTMLElement | null, dest: SVGSVGElement): { move: Animation; ghost: SVGSVGElement; cancel: () => void } | undefined {
   const src = tile?.querySelector('svg')
   if (!src || !layer) return
-  const a = src.getBoundingClientRect(), b = dest.getBoundingClientRect()
+  const a = src.getBoundingClientRect(), b = settledRect(dest)
   if (!a.width || !b.width) return
   const ghost = src.cloneNode(true) as SVGSVGElement
   ghost.querySelectorAll('.lg-r, :scope > rect:first-of-type, :scope > defs + rect').forEach((el) => el.remove())
@@ -130,5 +143,5 @@ function handDumbbell(tile: HTMLElement | null, layer: HTMLElement | null, dest:
     { transform: `translate(${(dx * 0.12).toFixed(1)}px, ${(dy * 0.42).toFixed(1)}px) scale(${(1 + (sx - 1) * 0.3).toFixed(3)}, ${(1 + (sy - 1) * 0.3).toFixed(3)})`, offset: 0.4 },
     { transform: `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px) scale(${sx.toFixed(4)}, ${sy.toFixed(4)})` },
   ], { duration: FLY_MS, easing: 'cubic-bezier(0.5, 0, 0.1, 1)', fill: 'forwards' })
-  return { move, cancel: () => { move.cancel(); ghost.remove() } }
+  return { move, ghost, cancel: () => { move.cancel(); ghost.remove() } }
 }

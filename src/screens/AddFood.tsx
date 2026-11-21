@@ -22,6 +22,8 @@ interface Props {
   date: string
   today: string
   onClose: () => void
+  /** Whether the app's tab bar should show: on the food list, unless the plate bar has the bottom. */
+  onTabs?: (show: boolean) => void
 }
 
 const k = (v: number) => Math.round(v).toLocaleString('en-US')
@@ -85,7 +87,7 @@ interface PhotoRun {
 
 type View = { kind: 'home' } | { kind: 'describe' } | { kind: 'edit'; food: Food } | PhotoRun | SearchRun | { kind: 'nofood'; photo: string; note: string } | { kind: 'detail'; draft: Draft; ai?: AiCtx } | { kind: 'meal'; name: string; items: MealItem[]; ai?: AiCtx; guessed?: boolean }
 
-export function AddFood({ date, today, onClose }: Props) {
+export function AddFood({ date, today, onClose, onTabs }: Props) {
   const foods = useLiveQuery(() => db.foods.where('archived').equals(0).sortBy('name'), []) ?? []
   // Most-logged foods first: they become the 1-tap chips.
   const recentIds = useLiveQuery(async () => {
@@ -124,7 +126,7 @@ export function AddFood({ date, today, onClose }: Props) {
     : foods.filter((f) => cat === 'all' || (cat === 'review' ? f.needsReview : f.category === cat))
   const cats = CATEGORIES.filter((c) => foods.some((f) => f.category === c.value))
 
-  const dayLabel = date === today ? 'Today' : formatDay(date, { weekday: 'short', day: 'numeric', month: 'short' })
+  const dayLong = formatDay(date, { weekday: 'long', day: 'numeric', month: 'long' })
 
   const open = (f: Food) => setView({
     kind: 'detail',
@@ -291,6 +293,9 @@ export function AddFood({ date, today, onClose }: Props) {
     }, 750)
   }
 
+  const tabsOn = view.kind === 'home' && plateItems.length === 0
+  useEffect(() => { onTabs?.(tabsOn) }, [tabsOn, onTabs])
+
   const back = () => {
     run.current++ // a photo still being analysed is dropped
     if (view.kind === 'home') onClose()
@@ -298,15 +303,20 @@ export function AddFood({ date, today, onClose }: Props) {
   }
 
   return (
-    <div className={`addpage${view.kind === 'detail' || view.kind === 'meal' ? ' docked' : ''}${view.kind === 'home' && plateItems.length ? ' plated' : ''}`} role="dialog" aria-label="Add food">
+    <div className={`addpage${view.kind === 'detail' || view.kind === 'meal' ? ' docked' : ''}${view.kind === 'home' && plateItems.length ? ' plated' : ''}${tabsOn ? ' tabbed' : ''}`} role="dialog" aria-label="Add food">
       {/* Copy of the page background over the header (and the Add button when there is one), so content scrolls under cleanly. */}
       <div className="aurora aurora-cover add-cover" aria-hidden="true" />
+      {/* Large title like the other pages (Week, Settings). On the list the tab bar is the way out; inner screens get a back button. */}
       <header className="add-top">
-        <button className="add-back" onClick={back} aria-label={view.kind === 'home' ? 'Close' : 'Back'}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
-        </button>
-        <h1>{view.kind === 'edit' ? 'Edit food' : 'Add food'}</h1>
-        <span className="add-day">{dayLabel}</span>
+        {view.kind !== 'home' && (
+          <button className="add-back" onClick={back} aria-label="Back">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+          </button>
+        )}
+        <div className="td-date">
+          <h1>{view.kind === 'edit' ? 'Edit food' : 'Add food'}</h1>
+          <span>{date === today ? 'Today · ' : ''}{dayLong}</span>
+        </div>
       </header>
 
       <input ref={fileRef} className="visually-hidden" type="file" accept="image/*" tabIndex={-1} aria-hidden="true" onChange={(e) => { onPhoto(e.target.files?.[0]); e.target.value = '' }} />
@@ -336,7 +346,7 @@ export function AddFood({ date, today, onClose }: Props) {
 
           {!q && recent.length > 0 && (
             <>
-              <h2 className="add-h">Recent <span>{plate.length ? 'tap to put on your plate' : 'tap to add'}</span></h2>
+              <div className="td-loghead add-h"><h2>Recent</h2><span>{plate.length ? 'Tap to put on your plate' : 'Tap to add'}</span></div>
               <div className="add-chips">
                 {recent.map((f, i) => (
                   <button
@@ -351,7 +361,7 @@ export function AddFood({ date, today, onClose }: Props) {
             </>
           )}
 
-          <h2 className="add-h">{q ? (matches.length ? 'Your foods' : 'No saved match') : <>Your foods <span>{foods.length}</span></>}</h2>
+          <div className="td-loghead add-h"><h2>{q && !matches.length ? 'No saved match' : 'Your foods'}</h2>{!q && <span>{foods.length}</span>}</div>
           {!q && (
             <div className="add-chips add-cats">
               <button aria-pressed={cat === 'all'} onClick={() => setCat('all')}>All</button>
@@ -363,7 +373,7 @@ export function AddFood({ date, today, onClose }: Props) {
           )}
           <ul className="add-list">
             {matches.map((f, i) => (
-              <FoodCard key={f.id} food={f} index={i} dayTarget={day?.target.kcal ?? 2000} picked={onPlate.has(f.id!)} onPick={(el) => pick(f, el)} onOpen={() => open(f)} />
+              <FoodCard key={f.id} food={f} index={i} picked={onPlate.has(f.id!)} onPick={(el) => pick(f, el)} onOpen={() => open(f)} />
             ))}
             {q && (
               <li style={{ animationDelay: `${0.04 * Math.min(matches.length, 8)}s` }} className={`add-card add-ai${matches.length ? '' : ' solo'}`}>
@@ -572,30 +582,29 @@ function blend(m: Macros): CSSProperties {
   return { '--s1': `${pa / 2}%`, '--s2': `${pa + pc / 2}%`, '--s3': `${pa + pc + (100 - pa - pc) / 2}%` } as CSSProperties
 }
 
-function FoodCard({ food: f, index, dayTarget, picked, onPick, onOpen }: { food: Food; index: number; dayTarget: number; picked: boolean; onPick: (el: Element) => void; onOpen: () => void }) {
+/** A saved food, drawn like a row in Today's log: macro stripe, name and serving, kcal. The circle on the right puts it
+ *  on the plate (fills with a tick). */
+function FoodCard({ food: f, index, picked, onPick, onOpen }: { food: Food; index: number; picked: boolean; onPick: (el: Element) => void; onOpen: () => void }) {
   const portion = scaleFood(f, defaultAmount(f))
-  const share = Math.min(1, dayTarget ? portion.kcal / dayTarget : 0)
-  const r = 15, c = 2 * Math.PI * r
+  const kp = portion.protein * 4, kc = portion.carbs * 4, kf = portion.fat * 9
+  const tot = kp + kc + kf || 1
+  const mark = { background: `linear-gradient(180deg, var(--protein) 0 ${(kp / tot) * 100}%, var(--carbs) 0 ${((kp + kc) / tot) * 100}%, var(--fat) 0)` } as CSSProperties
   return (
     <li className={`add-card${picked ? ' picked' : ''}`} style={{ animationDelay: `${0.03 * Math.min(index, 10)}s` }}>
-      {/* The ring is the plate toggle: it closes into a full circle and fills with a tick. */}
-      <button className="add-pick" onClick={(e) => onPick(e.currentTarget)} aria-pressed={picked} aria-label={picked ? `Take ${f.name} off the plate` : `Put ${f.name} on the plate`}>
-        <svg width="38" height="38" viewBox="0 0 38 38" aria-hidden="true">
-          <g className="add-mini">
-            <circle cx="19" cy="19" r={r} className="wk-ring-track" />
-            <circle cx="19" cy="19" r={r} className="wk-ring-arc" strokeDasharray={`${picked ? c : Math.max(share, 0.004) * c} ${c}`} />
-          </g>
-          <circle cx="19" cy="19" r="13" className="add-pick-fill" />
-          <path d="M13 19.5l4 4 8-8.5" className="add-pick-tick" />
-        </svg>
-      </button>
-      <button onClick={onOpen}>
-        <span className="add-card-text">
+      <button className="add-open" onClick={onOpen}>
+        <span className="td-mark" style={mark} aria-hidden="true" />
+        <span className="td-text">
           <strong>{f.name}{f.estimate && <span className="tag">est</span>}{f.needsReview && <span className="tag warn">check</span>}</strong>
-          <small>{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)}</small>
-          <span className="add-ribbon" style={blend(f)} aria-hidden="true" />
+          <span>{f.servingLabel ?? fmtAmount(f.baseAmount, f.unit)}</span>
         </span>
-        <span className="add-kcal">{k(portion.kcal)}<small>kcal</small></span>
+        <span className="td-kcal">{k(portion.kcal)}</span>
+      </button>
+      <button className="add-pick" onClick={(e) => onPick(e.currentTarget)} aria-pressed={picked} aria-label={picked ? `Take ${f.name} off the plate` : `Put ${f.name} on the plate`}>
+        <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+          <circle cx="13" cy="13" r="11" className="add-pick-ring" />
+          <circle cx="13" cy="13" r="12" className="add-pick-fill" />
+          <path d="M8 13.5l3.5 3.5 6.5-7" className="add-pick-tick" />
+        </svg>
       </button>
     </li>
   )
