@@ -229,14 +229,14 @@ main { flex: 1; padding: 4px 16px calc(env(safe-area-inset-bottom) + 110px); max
 .tabs button:active { transform: scale(0.92); }
 .tabs button[aria-current='page'] { color: var(--brand); }
 @media (prefers-reduced-motion: reduce) { .tab-bubble { transition: none; } }
-/* Bottom edge under the floating bar: what scrolls down there softens and fades out (as iOS does), so no hard card
-   edges peek round the pill's corners or show below it. */
-.tabs-edge {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; pointer-events: none;
-  height: calc(max(12px, calc(env(safe-area-inset-bottom) - 6px)) + 64px + 36px);
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 85%, transparent) 18%, var(--bg) 30%);
-  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 24%); mask-image: linear-gradient(to bottom, transparent, #000 24%);
+/* Bottom edge under the floating bar: an exact copy of the page background (the .aurora glow on --bg, same as the top
+   .aurora-cover), shown only at the bottom. Content scrolling down there fades into the real background, so no card
+   edges peek round the pill and no flat band cuts across the glow, whatever the tab's colours. */
+.aurora.tabs-edge {
+  z-index: 5; background: var(--bg);
+  --edge-solid: calc(max(12px, calc(env(safe-area-inset-bottom) - 6px)) + 64px + 6px);
+  -webkit-mask-image: linear-gradient(to top, #000 var(--edge-solid), transparent calc(var(--edge-solid) + 40px));
+  mask-image: linear-gradient(to top, #000 var(--edge-solid), transparent calc(var(--edge-solid) + 40px));
 }
 :root[data-intro] .app > .tabs-edge { opacity: 0; }
 

@@ -71,7 +71,7 @@ export default function App() {
   const go = (t: Tab) => { setAdding(false); setTab(t) }
   const tabBar = (
     <>
-      <div className="tabs-edge" aria-hidden="true" />
+      <div className="aurora tabs-edge" aria-hidden="true" />
       <nav className="tabs" aria-label="Sections" style={{ '--slot': adding ? 2 : [0, 1, 3, 4][TABS.findIndex((t) => t.id === tab)] ?? 0 } as CSSProperties}>
         <span className="tab-bubble" aria-hidden="true" />
         {TABS.map((t, i) => (
