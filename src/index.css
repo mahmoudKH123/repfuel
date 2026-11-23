@@ -866,6 +866,7 @@ button.meal-unit { color: var(--kcal); }
 
 
 .add-done { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); animation: fadeIn 0.2s ease both; }
+.add-done.out { pointer-events: none; animation: fadeOut 0.25s ease both; }
 .add-done span { width: 88px; height: 88px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--kcal); animation: pop 0.35s var(--ease) both; }
 .add-done p { margin: 0; font-weight: 700; font-size: 17px; }
 

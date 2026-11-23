@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { subscribeUndo, undoEvent, undoLast } from '../db/undo'
 import { haptic } from './haptic'
 
-const OPEN_MS = 6000 // pill with the label and the draining ring
+const OPEN_MS = 3000 // pill with the label and the draining ring
 const DOCK_MS = 60000 // then a small round button, until a minute after the change
 const DONE_MS = 1800 // "Undone" confirmation
 

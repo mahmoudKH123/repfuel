@@ -107,7 +107,7 @@ export function AddFood({ date, today, onClose, onTabs }: Props) {
   // The plate: foods picked to log together, each with its amount. `round` restarts the counters for a fresh plate.
   const [plate, setPlate] = useState<{ id: number; amount: number }[]>([])
   const [round, setRound] = useState(0)
-  const [done, setDone] = useState(false)
+  const [done, setDone] = useState<false | 'in' | 'out'>(false)
   const fileRef = useRef<HTMLInputElement>(null)
   // The photo being analysed: kept while its screens show it, freed when a new one comes or the page closes.
   const photoUrl = useRef('')
@@ -201,6 +201,8 @@ export function AddFood({ date, today, onClose, onTabs }: Props) {
   // "It was 3 eggs, no oil": the AI continues the same conversation (same pages, its last answer) and the same screen
   // updates. `onStep` shows what it is doing in the fix box. Errors show in the fix box.
   const fixMeal = async (ai: AiCtx, correction: string, current: string, file: File | undefined, onStep: (s: string) => void) => {
+    // Leaving the screen (Back, or adding) drops the fix: its answer must not pull you back to this result.
+    const id = ++run.current
     let photo: { image: string; mimeType: string } | undefined
     if (file) {
       try { photo = await photoToBase64(file) } catch { throw new Error('Could not open that photo. Try another one.') }
@@ -212,6 +214,7 @@ export function AddFood({ date, today, onClose, onTabs }: Props) {
       else if (e.t === 'think') onStep('Updating the numbers')
       else if (e.t === 'item') onStep(`Updated ${e.name}`)
     }, { text: correction || '(photo)', current, photo, ctx: ai.ctx })
+    if (run.current !== id) return
     showMeal(res.meal, { text: ai.text, rev: ai.rev + 1, ctx: res.ctx ?? ai.ctx })
   }
 
@@ -284,13 +287,16 @@ export function AddFood({ date, today, onClose, onTabs }: Props) {
   })
 
   // After adding, stay on this page: a check plays, then you're back at the search with an Undo.
+  // The list swaps in under the check, then the check fades away to show it (no one-frame cut).
   const finish = () => {
-    setDone(true)
+    run.current++ // a fix still running is dropped
+    setDone('in')
     window.setTimeout(() => {
-      setDone(false)
       setQuery('')
       setView({ kind: 'home' })
+      setDone('out')
     }, 750)
+    window.setTimeout(() => setDone(false), 1000)
   }
 
   const tabsOn = view.kind === 'home' && plateItems.length === 0
@@ -445,7 +451,7 @@ export function AddFood({ date, today, onClose, onTabs }: Props) {
 
 
       {done && (
-        <div className="add-done" aria-live="polite">
+        <div className={`add-done${done === 'out' ? ' out' : ''}`} aria-live="polite">
           <span><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg></span>
           <p>Added</p>
         </div>
@@ -777,8 +783,10 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
   const [editing, setEditing] = useState(draft.source === 'manual')
   const [save, setSave] = useState(draft.source !== 'manual')
   const [error, setError] = useState('')
+  // Set while saving: a second tap on Add must not log the food twice.
+  const busy = useRef(false)
 
-  const base: Macros = { kcal: Number(vals.kcal || 0), protein: Number(vals.protein || 0), carbs: Number(vals.carbs || 0), fat: Number(vals.fat || 0) }
+  const base: Macros ={ kcal: Number(vals.kcal || 0), protein: Number(vals.protein || 0), carbs: Number(vals.carbs || 0), fat: Number(vals.fat || 0) }
   const amt = Number(amount)
   const baseAmt = toBase(amt, unit, info)
   const portion = scaleFood({ ...base, baseAmount: eff.baseAmount }, baseAmt)
@@ -803,24 +811,32 @@ function Detail({ draft, eaten, target, date, onDone, onEdit, toPlate, onFix }: 
       const btn = document.querySelector('.add-dock .add-go')
       return toPlate(baseAmt, btn ?? document.body)
     }
-    const id = await undoable(`Added ${short(name.trim())}`, async () => {
-      let foodId = draft.food?.id
-      if (draft.source !== 'saved') {
-        // Keep the serving weight in the label, so this food can switch units next time too.
-        const gps = eff.gramsPerServing
-        const label = gps && !gramsFromLabel(eff.servingLabel)
-          ? eff.unit === 'serving' ? `${eff.servingLabel} (${Math.round(gps)}${eff.liquid ? 'ml' : 'g'})` : `1 serving, ${Math.round(gps)}${eff.liquid ? 'ml' : 'g'}`
-          : eff.servingLabel
-        if (save) foodId = await saveFood({
-          name: name.trim(),
-          category: draft.source === 'label' ? 'branded' : 'custom',
-          baseAmount: eff.baseAmount, unit: eff.unit, servingLabel: label,
-          estimate: draft.estimate, note: draft.note || undefined, ...base,
-        })
-      }
-      // Logged in the unit you picked (litres saved as ml), with macros already scaled.
-      return logQuick(date, { name: name.trim(), foodId, estimate: draft.estimate, ...toStored(amt, unit), ...portion })
-    }, { detail: leftAfter(target, eaten, portion.kcal) })
+    if (busy.current) return
+    busy.current = true
+    let id: number
+    try {
+      id = await undoable(`Added ${short(name.trim())}`, async () => {
+        let foodId = draft.food?.id
+        if (draft.source !== 'saved') {
+          // Keep the serving weight in the label, so this food can switch units next time too.
+          const gps = eff.gramsPerServing
+          const label = gps && !gramsFromLabel(eff.servingLabel)
+            ? eff.unit === 'serving' ? `${eff.servingLabel} (${Math.round(gps)}${eff.liquid ? 'ml' : 'g'})` : `1 serving, ${Math.round(gps)}${eff.liquid ? 'ml' : 'g'}`
+            : eff.servingLabel
+          if (save) foodId = await saveNew({
+            name: name.trim(),
+            category: draft.source === 'label' ? 'branded' : 'custom',
+            baseAmount: eff.baseAmount, unit: eff.unit, servingLabel: label,
+            estimate: draft.estimate, note: draft.note || undefined, ...base,
+          })
+        }
+        // Logged in the unit you picked (litres saved as ml), with macros already scaled.
+        return logQuick(date, { name: name.trim(), foodId, estimate: draft.estimate, ...toStored(amt, unit), ...portion })
+      }, { detail: leftAfter(target, eaten, portion.kcal) })
+    } catch {
+      busy.current = false
+      return setError('Could not save. Try again.')
+    }
     onDone(id, name.trim())
   }
 
@@ -980,13 +996,19 @@ function Meal({ name: initialName, initial, guessed, eaten, target, date, onDone
     if (on.some((i) => i.save && !i.name.trim())) return setError('Name the items you want to save.')
     setBusy(true)
     const r1 = (n: number) => Math.round(n * 10) / 10
-    const id = await undoable(`Added ${short(name.trim())}`, async () => {
-      for (const i of on) if (i.save && !i.food) await saveFood(toFood(i))
-      return logQuick(date, {
-        name: name.trim(), amount: 1, unit: 'serving', estimate: on.some((i) => i.estimate),
-        kcal: Math.round(totals.kcal), protein: r1(totals.protein), carbs: r1(totals.carbs), fat: r1(totals.fat),
-      })
-    }, { detail: leftAfter(target, eaten, totals.kcal) })
+    let id: number
+    try {
+      id = await undoable(`Added ${short(name.trim())}`, async () => {
+        for (const i of on) if (i.save && !i.food) await saveNew(toFood(i))
+        return logQuick(date, {
+          name: name.trim(), amount: 1, unit: 'serving', estimate: on.some((i) => i.estimate),
+          kcal: Math.round(totals.kcal), protein: r1(totals.protein), carbs: r1(totals.carbs), fat: r1(totals.fat),
+        })
+      }, { detail: leftAfter(target, eaten, totals.kcal) })
+    } catch {
+      setBusy(false)
+      return setError('Could not save. Try again.')
+    }
     onDone(id, name.trim())
   }
 
@@ -1083,6 +1105,15 @@ function SizeChips({ guess, amount, unit, onPick }: { guess: number; amount: num
       })}
     </div>
   )
+}
+
+/** Saves a new food, unless an identical one (same name, serving and numbers) is already saved: then that one is used,
+ *  so adding the same AI result twice doesn't leave two copies in Your foods. */
+async function saveNew(f: Parameters<typeof saveFood>[0]): Promise<number> {
+  const name = f.name.trim().toLowerCase()
+  const same = await db.foods.where('archived').equals(0).filter((x) => x.name.trim().toLowerCase() === name && x.unit === f.unit
+    && x.baseAmount === f.baseAmount && x.kcal === f.kcal && x.protein === f.protein && x.carbs === f.carbs && x.fat === f.fat).first()
+  return same?.id ?? saveFood(f)
 }
 
 const num = (v: number) => (v ? String(v) : '')
